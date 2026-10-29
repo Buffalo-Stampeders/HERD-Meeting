@@ -196,14 +196,15 @@ function showSegment(i){
   const kind = renderVideo(seg);
   // BoxCast and Google Drive players give no "ended" signal, so the quiz can't be gated on them.
   if (kind === "boxcast" || kind === "gdrive") state.watched = true;
+  const noQuiz = isNoQuiz(seg);
   $("videoNote").textContent = (CONFIG.requireFullWatch && !state.watched)
-    ? "Watch the full video to unlock the questions below."
-    : "Answer the questions below to continue.";
+    ? (noQuiz ? "Watch the full video to continue." : "Watch the full video to unlock the questions below.")
+    : (noQuiz ? "" : "Answer the questions below to continue.");
   renderNotes(seg);
   $("status").textContent = "";
   const quiz = $("quiz"); quiz.classList.toggle("locked", !state.watched);
   const f = $("quizForm"); f.innerHTML = "";
-  seg.questions.forEach((qu, qi) => {
+  (noQuiz ? [] : seg.questions).forEach((qu, qi) => {
     const fs = document.createElement("fieldset");
     const lg = document.createElement("legend"); lg.textContent = `${qi+1}. ${qu.q}`; fs.appendChild(lg);
     qu.options.forEach((opt, oi) => {
@@ -214,17 +215,19 @@ function showSegment(i){
     f.appendChild(fs);
   });
   const btn = document.createElement("button"); btn.className="btn"; btn.type="submit";
-  btn.textContent = (i === CONFIG.segments.length-1) ? "Submit & finish" : "Submit & continue";
+  const last = i === CONFIG.segments.length-1;
+  btn.textContent = noQuiz ? (last ? "Finish" : "Continue") : (last ? "Submit & finish" : "Submit & continue");
   f.appendChild(btn);
   renderProgress();
   window.scrollTo({top:0, behavior:"smooth"});
 }
+const isNoQuiz = seg => !!seg.noQuiz || !(seg.questions && seg.questions.length);
 
 /* ---------------- video players ---------------- */
 function videoEnded(){
   if (state.watched) return;
   state.watched = true; $("quiz").classList.remove("locked");
-  $("videoNote").textContent = "Video complete — answer the questions below.";
+  $("videoNote").textContent = isNoQuiz(CONFIG.segments[state.idx]) ? "Video complete — click Continue." : "Video complete — answer the questions below.";
 }
 const gating = () => CONFIG.requireFullWatch && !state.watched;
 
@@ -367,13 +370,15 @@ $("quizForm").addEventListener("submit", async e => {
   if (!state.watched) return;
   const seg = CONFIG.segments[state.idx];
   state.attempts++;
-  const answers = seg.questions.map((_, qi) => Number(new FormData(e.target).get(`q${qi}`)));
-  const results = answers.map((a, qi) => a === seg.questions[qi].answer);
-  const correct = results.filter(Boolean).length, total = seg.questions.length;
-  const passed = CONFIG.requireAllCorrect ? correct === total : true;
+  const noQuiz = isNoQuiz(seg);
+  const questions = noQuiz ? [] : seg.questions;
+  const answers = questions.map((_, qi) => Number(new FormData(e.target).get(`q${qi}`)));
+  const results = answers.map((a, qi) => a === questions[qi].answer);
+  const correct = results.filter(Boolean).length, total = questions.length;
+  const passed = noQuiz ? true : (CONFIG.requireAllCorrect ? correct === total : true);
 
   // Mark options
-  seg.questions.forEach((qu, qi) => {
+  questions.forEach((qu, qi) => {
     const labs = e.target.querySelectorAll(`input[name=q${qi}]`);
     labs.forEach((inp) => {
       const lab = inp.parentElement; lab.classList.remove("correct","wrong");
@@ -388,23 +393,23 @@ $("quizForm").addEventListener("submit", async e => {
     submittedAtLocal: new Date().toLocaleString(),
     course: CONFIG.courseTitle,
     segment: state.idx + 1, segmentTitle: seg.title,
-    attempt: state.attempts, score: `${correct}/${total}`, passed,
-    answers: answers.map((a, qi) => seg.questions[qi].options[a] ?? "").join(" | "),
+    attempt: state.attempts, score: noQuiz ? "viewed" : `${correct}/${total}`, passed,
+    answers: noQuiz ? "(no quiz)" : answers.map((a, qi) => questions[qi].options[a] ?? "").join(" | "),
     secondsOnSegment: Math.round((Date.now() - state.startedAt.getTime())/1000),
     completedCourse: passed && state.idx === CONFIG.segments.length - 1
   };
   state.log.push(entry);
   const btn = e.target.querySelector("button"); btn.disabled = true;
-  $("status").textContent = "Recording your answers…";
+  $("status").textContent = noQuiz ? "Recording…" : "Recording your answers…";
   await logSubmission(entry);
   btn.disabled = false;
 
   if (passed) {
-    $("status").innerHTML = `<span class="feedback ok">Correct — ${correct}/${total}.</span>`;
+    $("status").innerHTML = noQuiz ? "" : `<span class="feedback ok">Correct — ${correct}/${total}.</span>`;
     setTimeout(() => {
       if (state.idx + 1 < CONFIG.segments.length) showSegment(state.idx + 1);
       else finish();
-    }, 900);
+    }, noQuiz ? 150 : 900);
   } else {
     $("status").innerHTML = `<span class="feedback bad">${correct}/${total} correct. Review the video and try again.</span>`;
   }
