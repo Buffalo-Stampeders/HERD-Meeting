@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Training Course</title>
+<link rel="stylesheet" href="https://use.typekit.net/vvm7dvi.css">
+<style>
+  /* Palette and type lifted from tvcs.org (Elementor globals + Adobe Fonts kit vvm7dvi) */
+  :root{
+    --green:#00492B; --green-dark:#003620; --bronze:#BC9B6A; --tan:#E0C990; --cream:#FAF3DD; --cream-light:#FFFBEE;
+    --ink:#333333; --muted:#6b6b6b; --line:#e3dccb; --bg:#ffffff;
+    --ok:#1b7f3b; --bad:#C24643;
+    --font-head:"ivyjournal", Georgia, "Times New Roman", serif;
+    --font-body:"indivisible", "Helvetica Neue", Arial, sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:16px;line-height:1.5}
+  .course{max-width:920px;margin:0 auto;padding:16px}
+  h1,h2,h3{font-family:var(--font-head);font-weight:800;line-height:1.1;margin:0;color:var(--green)}
+  h1{font-size:clamp(26px,3.5vw,36px)}
+  h2{font-size:clamp(20px,2.6vw,26px)}
+  .eyebrow{font-size:11px;font-weight:700;letter-spacing:3px;text-transform:uppercase;color:var(--bronze);margin-bottom:6px}
+  .header{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;border-bottom:3px solid var(--bronze);padding-bottom:14px;margin-bottom:18px;flex-wrap:wrap}
+  .header .who{font-size:13px;font-weight:600;color:var(--green)}
+  .progress{display:flex;gap:4px;margin:14px 0 22px}
+  .progress span{flex:1;height:6px;background:var(--line)}
+  .progress span.done{background:var(--green)}
+  .progress span.current{background:var(--tan)}
+  .card{background:var(--cream);border-top:4px solid var(--green);padding:26px;margin-bottom:18px}
+  label{display:block;font-size:11px;font-weight:700;color:var(--green);margin:14px 0 5px;text-transform:uppercase;letter-spacing:2px}
+  input[type=text],input[type=email]{width:100%;font:inherit;font-weight:500;padding:11px 13px;border:1px solid var(--bronze);border-radius:3px;background:#fff;color:var(--green)}
+  input:focus{outline:2px solid var(--green);outline-offset:1px}
+  .btn{display:inline-block;font-family:var(--font-body);font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;background:var(--green);color:#fff;border:0;border-radius:0;padding:14px 28px;cursor:pointer;margin-top:18px;transition:background .15s}
+  .btn:hover{background:var(--bronze)}
+  .btn[disabled]{background:#9aa39e;cursor:not-allowed}
+  .btn.secondary{background:transparent;color:var(--green);border:2px solid var(--green)}
+  .video-wrap{position:relative;background:#000;overflow:hidden;aspect-ratio:16/9;border:1px solid var(--line)}
+  .video-wrap video{width:100%;height:100%;display:block;background:#000}
+  .segment-title{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+  .segment-title .count{font-size:11px;font-weight:700;color:var(--bronze);text-transform:uppercase;letter-spacing:3px}
+  .note{font-size:14px;color:var(--muted);margin-top:10px}
+  .quiz{margin-top:20px;border-top:1px solid var(--bronze);padding-top:18px}
+  .quiz.locked{opacity:.45;pointer-events:none}
+  fieldset{border:0;padding:0;margin:0 0 20px}
+  legend{font-family:var(--font-head);font-weight:800;font-size:18px;color:var(--green);margin-bottom:10px;line-height:1.2}
+  .opt{display:flex;align-items:flex-start;gap:10px;padding:10px 13px;border:1px solid var(--line);border-radius:0;background:#fff;margin-bottom:6px;cursor:pointer;font-weight:500}
+  .opt:hover{border-color:var(--bronze)}
+  .opt:has(input:checked){border-color:var(--green);background:var(--cream-light);box-shadow:inset 3px 0 0 var(--green)}
+  .opt input{margin-top:4px;accent-color:var(--green)}
+  .opt.correct{border-color:var(--ok);background:#e8f5ec}
+  .opt.wrong{border-color:var(--bad);background:#fdecea}
+  .feedback{font-weight:700;margin-top:8px;font-size:15px}
+  .feedback.ok{color:var(--ok)} .feedback.bad{color:var(--bad)}
+  .status{font-size:14px;color:var(--muted);margin-top:8px;min-height:1.2em}
+  .done-card{text-align:center;padding:44px 22px;background:var(--green);border-top-color:var(--bronze)}
+  .done-card h2{color:#fff} .done-card .note{color:var(--tan)}
+  .done-card .big{font-size:56px;color:var(--tan);font-family:var(--font-head);font-weight:800;line-height:1}
+  .hidden{display:none !important}
+  @media (max-width:600px){ .card{padding:18px} }
+</style>
+</head>
+<body>
+<div class="course" id="app">
+  <div class="header">
+    <h1 id="courseTitle">Training Course</h1>
+    <div class="who" id="who"></div>
+  </div>
+  <div class="progress" id="progress"></div>
+
+  <!-- Step 0: identify the learner -->
+  <section class="card" id="startCard">
+    <div class="eyebrow">Sign in</div>
+    <h2>Before you begin</h2>
+    <p class="note" id="courseIntro"></p>
+    <form id="startForm" autocomplete="on">
+      <label for="name">Full name</label>
+      <input type="text" id="name" required placeholder="First and last name">
+      <label for="email">Email address</label>
+      <input type="email" id="email" required placeholder="you@example.com">
+      <button class="btn" type="submit">Start course</button>
+    </form>
+  </section>
+
+  <!-- Step 1..n: a video segment + its quiz -->
+  <section class="card hidden" id="segmentCard">
+    <div class="segment-title">
+      <div><div class="eyebrow" id="segCount"></div><h2 id="segTitle"></h2></div>
+    </div>
+    <div class="video-wrap"><video id="video" controls playsinline preload="metadata"></video></div>
+    <p class="note" id="videoNote"></p>
+    <div class="quiz locked" id="quiz">
+      <form id="quizForm"></form>
+      <div class="status" id="status"></div>
+    </div>
+  </section>
+
+  <!-- Done -->
+  <section class="card done-card hidden" id="doneCard">
+    <div class="big">&#10003;</div>
+    <h2 id="doneTitle">Course complete</h2>
+    <p class="note" id="doneNote"></p>
+  </section>
+</div>
+
+<script>
+/* =====================================================================
+   CONFIG — this is the only block you need to edit.
+   ===================================================================== */
+// Course content is loaded live from the backend (edit it in admin.html).
+// The values below are only the fallback used when nothing has been published yet.
+let CONFIG = {
+  courseTitle: "Buffalo HERD Volunteer Training",
+  intro: "Watch each video, then answer the questions to unlock the next section.",
+
+  // Where submissions are logged. Paste the Google Apps Script "Web app" URL
+  // (see apps-script.gs). Leave empty to skip remote logging while testing.
+  logEndpoint: "https://script.google.com/macros/s/AKfycbymna1peFFke8U96Dhyv-jQvQGNwtStQJP6-dGM9qB6cGTkviKNDVxSC6Nb3jbfDPOsGw/exec",
+
+  // Must the learner watch the whole video before the quiz unlocks?
+  requireFullWatch: true,
+  // Must every answer be correct to advance? (false = one attempt, any score advances)
+  requireAllCorrect: true,
+  // Show which option was correct after a wrong attempt?
+  revealCorrect: false,
+
+  doneTitle: "Course complete",
+  doneNote: "Your results have been recorded. You may close this page.",
+
+  // One entry per video segment. Use direct links to .mp4 or .mov files.
+  // (MOV files play in Safari/iOS; for Chrome/Firefox/Android use MP4 / H.264.)
+  segments: [
+    {
+      title: "Section 1: Welcome",
+      video: "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4",
+      questions: [
+        { q: "What color are the flowers in the video?",
+          options: ["Red", "Yellow", "Blue", "White"], answer: 1 },
+        { q: "What is the main subject of this clip?",
+          options: ["A city street", "A flower in a garden", "A sports field", "A classroom"], answer: 1 }
+      ]
+    },
+    {
+      title: "Section 2: Policies & Expectations",
+      video: "https://www.w3schools.com/html/mov_bbb.mp4",
+      questions: [
+        { q: "What kind of animal is the main character?",
+          options: ["A rabbit", "A squirrel", "A bird", "A bear"], answer: 0 },
+        { q: "Where does the clip take place?",
+          options: ["Underwater", "In a meadow", "In space", "In a gym"], answer: 1 },
+        { q: "Which of these should you do first in this section?",
+          options: ["Skip the video", "Watch the whole video", "Email the coach", "Close the page"], answer: 1 }
+      ]
+    }
+  ]
+};
+/* ===================================================================== */
+
+const $ = (id) => document.getElementById(id);
+const state = { name:"", email:"", idx:0, attempts:0, watched:false, startedAt:null, log:[] };
+
+function renderProgress(){
+  const p = $("progress"); p.innerHTML = "";
+  CONFIG.segments.forEach((_, i) => {
+    const s = document.createElement("span");
+    if (i < state.idx) s.className = "done";
+    else if (i === state.idx && state.name) s.className = "current";
+    p.appendChild(s);
+  });
+}
+
+function showSegment(i){
+  const seg = CONFIG.segments[i];
+  state.idx = i; state.attempts = 0; state.watched = !CONFIG.requireFullWatch; state.startedAt = new Date();
+  $("startCard").classList.add("hidden"); $("doneCard").classList.add("hidden");
+  $("segmentCard").classList.remove("hidden");
+  $("segTitle").textContent = seg.title;
+  $("segCount").textContent = `Section ${i+1} of ${CONFIG.segments.length}`;
+  const v = $("video"); v.pause(); v.src = seg.video; v.load();
+  $("videoNote").textContent = CONFIG.requireFullWatch
+    ? "Watch the full video to unlock the questions below."
+    : "Answer the questions below to continue.";
+  $("status").textContent = "";
+  const quiz = $("quiz"); quiz.classList.toggle("locked", !state.watched);
+  const f = $("quizForm"); f.innerHTML = "";
+  seg.questions.forEach((qu, qi) => {
+    const fs = document.createElement("fieldset");
+    const lg = document.createElement("legend"); lg.textContent = `${qi+1}. ${qu.q}`; fs.appendChild(lg);
+    qu.options.forEach((opt, oi) => {
+      const lab = document.createElement("label"); lab.className = "opt"; lab.style.textTransform="none"; lab.style.letterSpacing="0"; lab.style.color="inherit"; lab.style.fontSize="inherit"; lab.style.margin="0 0 6px";
+      const inp = document.createElement("input"); inp.type="radio"; inp.name=`q${qi}`; inp.value=oi; inp.required=true;
+      lab.appendChild(inp); lab.appendChild(document.createTextNode(opt)); fs.appendChild(lab);
+    });
+    f.appendChild(fs);
+  });
+  const btn = document.createElement("button"); btn.className="btn"; btn.type="submit";
+  btn.textContent = (i === CONFIG.segments.length-1) ? "Submit & finish" : "Submit & continue";
+  f.appendChild(btn);
+  renderProgress();
+  window.scrollTo({top:0, behavior:"smooth"});
+}
+
+$("video").addEventListener("ended", () => {
+  state.watched = true; $("quiz").classList.remove("locked");
+  $("videoNote").textContent = "Video complete — answer the questions below.";
+});
+// Discourage scrubbing past unwatched content when full watch is required.
+let lastTime = 0;
+$("video").addEventListener("timeupdate", e => { if (!e.target.seeking) lastTime = e.target.currentTime; });
+$("video").addEventListener("seeking", e => {
+  const v = e.target;
+  if (CONFIG.requireFullWatch && !state.watched && v.currentTime > lastTime + 1.5) v.currentTime = lastTime;
+});
+
+$("startForm").addEventListener("submit", e => {
+  e.preventDefault();
+  state.name = $("name").value.trim(); state.email = $("email").value.trim();
+  $("who").textContent = `${state.name} · ${state.email}`;
+  showSegment(0);
+});
+
+$("quizForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  if (!state.watched) return;
+  const seg = CONFIG.segments[state.idx];
+  state.attempts++;
+  const answers = seg.questions.map((_, qi) => Number(new FormData(e.target).get(`q${qi}`)));
+  const results = answers.map((a, qi) => a === seg.questions[qi].answer);
+  const correct = results.filter(Boolean).length, total = seg.questions.length;
+  const passed = CONFIG.requireAllCorrect ? correct === total : true;
+
+  // Mark options
+  seg.questions.forEach((qu, qi) => {
+    const labs = e.target.querySelectorAll(`input[name=q${qi}]`);
+    labs.forEach((inp) => {
+      const lab = inp.parentElement; lab.classList.remove("correct","wrong");
+      if (Number(inp.value) === answers[qi]) lab.classList.add(results[qi] ? "correct" : "wrong");
+      else if (CONFIG.revealCorrect && Number(inp.value) === qu.answer) lab.classList.add("correct");
+    });
+  });
+
+  const entry = {
+    name: state.name, email: state.email,
+    submittedAt: new Date().toISOString(),
+    submittedAtLocal: new Date().toLocaleString(),
+    course: CONFIG.courseTitle,
+    segment: state.idx + 1, segmentTitle: seg.title,
+    attempt: state.attempts, score: `${correct}/${total}`, passed,
+    answers: answers.map((a, qi) => seg.questions[qi].options[a] ?? "").join(" | "),
+    secondsOnSegment: Math.round((Date.now() - state.startedAt.getTime())/1000),
+    completedCourse: passed && state.idx === CONFIG.segments.length - 1
+  };
+  state.log.push(entry);
+  const btn = e.target.querySelector("button"); btn.disabled = true;
+  $("status").textContent = "Recording your answers…";
+  await logSubmission(entry);
+  btn.disabled = false;
+
+  if (passed) {
+    $("status").innerHTML = `<span class="feedback ok">Correct — ${correct}/${total}.</span>`;
+    setTimeout(() => {
+      if (state.idx + 1 < CONFIG.segments.length) showSegment(state.idx + 1);
+      else finish();
+    }, 900);
+  } else {
+    $("status").innerHTML = `<span class="feedback bad">${correct}/${total} correct. Review the video and try again.</span>`;
+  }
+});
+
+function finish(){
+  state.idx = CONFIG.segments.length; renderProgress();
+  $("segmentCard").classList.add("hidden"); $("doneCard").classList.remove("hidden");
+  $("doneTitle").textContent = CONFIG.doneTitle; $("doneNote").textContent = CONFIG.doneNote;
+  // Tell a parent page (e.g. Squarespace) that the course finished, if embedded in an iframe.
+  try { window.parent.postMessage({ type:"course-complete", name:state.name, email:state.email }, "*"); } catch(_){}
+}
+
+async function logSubmission(entry){
+  // Always keep a local copy (handy for debugging; visible via localStorage "courseLog").
+  try { const l = JSON.parse(localStorage.getItem("courseLog")||"[]"); l.push(entry); localStorage.setItem("courseLog", JSON.stringify(l)); } catch(_){}
+  if (!CONFIG.logEndpoint) return;
+  try {
+    // text/plain avoids a CORS preflight, which Apps Script web apps do not answer.
+    await fetch(CONFIG.logEndpoint, { method:"POST", mode:"no-cors", headers:{ "Content-Type":"text/plain" }, body: JSON.stringify(entry) });
+  } catch(err) { console.warn("Log failed", err); }
+}
+
+// Init: fetch the published course content, then render.
+async function loadRemoteConfig(){
+  // Preview mode: admin.html passes its unpublished draft via sessionStorage.
+  if (new URLSearchParams(location.search).get("preview") === "1") {
+    try {
+      const draft = JSON.parse(sessionStorage.getItem("coursePreviewConfig") || "null");
+      if (draft) { CONFIG = Object.assign({}, CONFIG, draft, { logEndpoint: "" }); $("who").textContent = "PREVIEW — submissions not logged"; return; }
+    } catch(_){}
+  }
+  if (!CONFIG.logEndpoint) return;
+  try {
+    const r = await fetch(CONFIG.logEndpoint + "?action=config&t=" + Date.now());
+    const data = await r.json();
+    if (data.ok && data.config && Array.isArray(data.config.segments) && data.config.segments.length) {
+      CONFIG = Object.assign({}, CONFIG, data.config, { logEndpoint: CONFIG.logEndpoint });
+    }
+  } catch (err) { console.warn("Using built-in course content; backend unreachable:", err); }
+}
+(async () => {
+  $("courseIntro").textContent = "Loading course…";
+  await loadRemoteConfig();
+  $("courseTitle").textContent = CONFIG.courseTitle; document.title = CONFIG.courseTitle;
+  $("courseIntro").textContent = CONFIG.intro;
+  renderProgress();
+})();
+</script>
+</body>
+</html>
