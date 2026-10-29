@@ -39,12 +39,18 @@
   .video-wrap video,.video-wrap iframe{position:absolute;inset:0;width:100%;height:100%;display:block;background:#000;border:0}
   .video-wrap .embed-host{position:absolute;inset:0}
   .video-wrap .embed-host > *{width:100%!important;height:100%!important}
+  .rich-html{font-size:16px;line-height:1.6}
+  .rich-html h2{font-family:var(--font-head);font-weight:800;font-size:22px;color:var(--green);margin:16px 0 6px}
+  .rich-html h3{font-family:var(--font-head);font-weight:800;font-size:18px;color:var(--bronze);margin:14px 0 4px}
+  .rich-html p{margin:0 0 10px} .rich-html ul,.rich-html ol{margin:0 0 10px;padding-left:26px}
+  .rich-html blockquote{margin:12px 0;padding:10px 14px;border-left:4px solid var(--bronze);background:var(--cream-light)}
+  .rich-html a{color:var(--green);font-weight:600}
+  .text-body{background:#fff;border:1px solid var(--line);padding:22px 24px}
   .notes{margin-top:14px;border:1px solid var(--line);background:#fff}
   .notes-toggle{display:block;width:100%;text-align:left;font:inherit;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--green);background:var(--cream-light);border:0;padding:11px 14px;cursor:pointer}
   .notes-toggle::before{content:"▸";display:inline-block;margin-right:8px;transition:transform .15s}
   .notes-toggle[aria-expanded=true]::before{transform:rotate(90deg)}
-  .notes-body{padding:14px 16px;font-size:15px;line-height:1.55;white-space:pre-wrap}
-  .notes-body a{color:var(--green);font-weight:600}
+  .notes-body{padding:14px 16px;font-size:15px}
   .notes.collapsed .notes-body{display:none}
   .segment-title{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:14px;flex-wrap:wrap}
   .segment-title .count{font-size:11px;font-weight:700;color:var(--bronze);text-transform:uppercase;letter-spacing:3px}
@@ -97,10 +103,11 @@
       <div><div class="eyebrow" id="segCount"></div><h2 id="segTitle"></h2></div>
     </div>
     <div class="video-wrap" id="videoWrap"></div>
+    <div class="text-body rich-html hidden" id="textBody"></div>
     <p class="note" id="videoNote"></p>
     <div class="notes hidden" id="notes">
       <button type="button" class="notes-toggle hidden" id="notesToggle" aria-expanded="false">Show notes</button>
-      <div class="notes-body" id="notesBody"></div>
+      <div class="notes-body rich-html" id="notesBody"></div>
     </div>
     <div class="quiz locked" id="quiz">
       <form id="quizForm"></form>
@@ -193,14 +200,23 @@ function showSegment(i){
   $("segmentCard").classList.remove("hidden");
   $("segTitle").textContent = seg.title;
   $("segCount").textContent = `Section ${i+1} of ${CONFIG.segments.length}`;
-  const kind = renderVideo(seg);
-  // BoxCast and Google Drive players give no "ended" signal, so the quiz can't be gated on them.
-  if (kind === "boxcast" || kind === "gdrive") state.watched = true;
+  const isText = seg.type === "text";
+  $("videoWrap").classList.toggle("hidden", isText); $("textBody").classList.toggle("hidden", !isText);
   const noQuiz = isNoQuiz(seg);
-  $("videoNote").textContent = (CONFIG.requireFullWatch && !state.watched)
-    ? (noQuiz ? "Watch the full video to continue." : "Watch the full video to unlock the questions below.")
-    : (noQuiz ? "" : "Answer the questions below to continue.");
-  renderNotes(seg);
+  if (isText) {
+    destroyPlayers(); state.watched = true;
+    $("textBody").innerHTML = sanitize(seg.body || "");
+    $("videoNote").textContent = noQuiz ? "" : "Answer the questions below to continue.";
+    $("notes").classList.add("hidden");
+  } else {
+    const kind = renderVideo(seg);
+    // BoxCast and Google Drive players give no "ended" signal, so the quiz can't be gated on them.
+    if (kind === "boxcast" || kind === "gdrive") state.watched = true;
+    $("videoNote").textContent = (CONFIG.requireFullWatch && !state.watched)
+      ? (noQuiz ? "Watch the full video to continue." : "Watch the full video to unlock the questions below.")
+      : (noQuiz ? "" : "Answer the questions below to continue.");
+    renderNotes(seg);
+  }
   $("status").textContent = "";
   const quiz = $("quiz"); quiz.classList.toggle("locked", !state.watched);
   const f = $("quizForm"); f.innerHTML = "";
@@ -338,10 +354,12 @@ function loadYouTubeApi(){
 /* ---------------- notes under the video ---------------- */
 function renderNotes(seg){
   const box = $("notes"), body = $("notesBody"), tog = $("notesToggle");
-  const text = (seg.notes || "").trim();
-  box.classList.toggle("hidden", !text);
-  if (!text) return;
-  body.innerHTML = linkify(text);
+  const raw = (seg.notes || "").trim();
+  const html = /</.test(raw) ? sanitize(raw) : linkify(raw).replace(/\n/g, "<br>");
+  const hasText = (() => { const d = document.createElement("div"); d.innerHTML = html; return d.textContent.trim().length > 0; })();
+  box.classList.toggle("hidden", !hasText);
+  if (!hasText) return;
+  body.innerHTML = html;
   const collapsed = !!seg.notesCollapsed;
   tog.classList.toggle("hidden", !collapsed);
   box.classList.toggle("collapsed", collapsed);
@@ -353,6 +371,22 @@ $("notesToggle").addEventListener("click", () => {
   const seg = CONFIG.segments[state.idx] || {};
   tog.textContent = open ? (seg.notesHideLabel || "Hide notes") : (seg.notesLabel || "Show notes");
 });
+// Allow-list sanitizer for admin-authored HTML (headings, lists, links, emphasis only).
+function sanitize(html){
+  const ALLOWED = { P:[], BR:[], B:[], STRONG:[], I:[], EM:[], U:[], H2:[], H3:[], UL:[], OL:[], LI:[], BLOCKQUOTE:[], A:["href"], DIV:[], SPAN:[] };
+  const doc = new DOMParser().parseFromString("<body>" + html, "text/html");
+  const walk = node => {
+    [...node.childNodes].forEach(ch => {
+      if (ch.nodeType === 3) return;
+      if (ch.nodeType !== 1 || !(ch.tagName in ALLOWED)) { ch.replaceWith(...(ch.childNodes ? [...ch.childNodes] : [])); return walk(node); }
+      [...ch.attributes].forEach(a => { if (!ALLOWED[ch.tagName].includes(a.name)) ch.removeAttribute(a.name); });
+      if (ch.tagName === "A") { const h = ch.getAttribute("href") || ""; if (!/^https?:\/\/|^mailto:/i.test(h)) ch.removeAttribute("href"); else { ch.target = "_blank"; ch.rel = "noopener"; } }
+      walk(ch);
+    });
+  };
+  walk(doc.body);
+  return doc.body.innerHTML;
+}
 function linkify(text){
   const esc = s => s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   return esc(text).replace(/(https?:\/\/[^\s<]+)/g, u => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);

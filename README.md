@@ -7,6 +7,10 @@ Gated video training: learners enter name + email, watch each video segment, and
 | `course.html` | Learner-facing course. Embed this on the website. Loads its content live from the backend. |
 | `admin.html` | Password-protected dashboard to edit modules, videos, questions and answers, view submissions, and export CSV. |
 
+## Section types
+
+A section is either a **video module** or a **text-only section** (a header plus rich text — headings, bold, lists, links, callouts). Either kind can carry quiz questions or be set to "No questions" so the learner just clicks Continue.
+
 ## Video sources
 
 Each module's video can be an **MP4/MOV file URL**, a **YouTube** link, a **Google Drive** share link (set to "Anyone with the link"), or a **BoxCast** embed code. The "watch the full video before the questions unlock" gate works for files and YouTube; Drive and BoxCast players can't report when playback ends, so those modules unlock their questions immediately. Each module can also carry optional notes shown under the video, either always visible or behind a "Show notes" toggle.
