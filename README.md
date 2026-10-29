@@ -6,6 +6,10 @@ Gated video training: learners enter name + email, watch each video segment, and
 |---|---|
 | `course.html` | Learner-facing course. Embed this on the website. Loads its content live from the backend. |
 | `admin.html` | Password-protected dashboard to edit modules, videos, questions and answers, view submissions, and export CSV. |
+
+## Video sources
+
+Each module's video can be an **MP4/MOV file URL**, a **YouTube** link, a **Google Drive** share link (set to "Anyone with the link"), or a **BoxCast** embed code. The "watch the full video before the questions unlock" gate works for files and YouTube; Drive and BoxCast players can't report when playback ends, so those modules unlock their questions immediately. Each module can also carry optional notes shown under the video, either always visible or behind a "Show notes" toggle.
 | `apps-script.gs` | Google Apps Script backend (bound to the Google Sheet). Stores the course config and logs submissions. |
 
 ## Live pages (GitHub Pages)

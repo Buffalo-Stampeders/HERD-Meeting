@@ -36,7 +36,16 @@
   .btn[disabled]{background:#9aa39e;cursor:not-allowed}
   .btn.secondary{background:transparent;color:var(--green);border:2px solid var(--green)}
   .video-wrap{position:relative;background:#000;overflow:hidden;aspect-ratio:16/9;border:1px solid var(--line)}
-  .video-wrap video{width:100%;height:100%;display:block;background:#000}
+  .video-wrap video,.video-wrap iframe{position:absolute;inset:0;width:100%;height:100%;display:block;background:#000;border:0}
+  .video-wrap .embed-host{position:absolute;inset:0}
+  .video-wrap .embed-host > *{width:100%!important;height:100%!important}
+  .notes{margin-top:14px;border:1px solid var(--line);background:#fff}
+  .notes-toggle{display:block;width:100%;text-align:left;font:inherit;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--green);background:var(--cream-light);border:0;padding:11px 14px;cursor:pointer}
+  .notes-toggle::before{content:"▸";display:inline-block;margin-right:8px;transition:transform .15s}
+  .notes-toggle[aria-expanded=true]::before{transform:rotate(90deg)}
+  .notes-body{padding:14px 16px;font-size:15px;line-height:1.55;white-space:pre-wrap}
+  .notes-body a{color:var(--green);font-weight:600}
+  .notes.collapsed .notes-body{display:none}
   .segment-title{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:14px;flex-wrap:wrap}
   .segment-title .count{font-size:11px;font-weight:700;color:var(--bronze);text-transform:uppercase;letter-spacing:3px}
   .note{font-size:14px;color:var(--muted);margin-top:10px}
@@ -87,8 +96,12 @@
     <div class="segment-title">
       <div><div class="eyebrow" id="segCount"></div><h2 id="segTitle"></h2></div>
     </div>
-    <div class="video-wrap"><video id="video" controls playsinline preload="metadata"></video></div>
+    <div class="video-wrap" id="videoWrap"></div>
     <p class="note" id="videoNote"></p>
+    <div class="notes hidden" id="notes">
+      <button type="button" class="notes-toggle hidden" id="notesToggle" aria-expanded="false">Show notes</button>
+      <div class="notes-body" id="notesBody"></div>
+    </div>
     <div class="quiz locked" id="quiz">
       <form id="quizForm"></form>
       <div class="status" id="status"></div>
@@ -127,12 +140,16 @@ let CONFIG = {
   doneTitle: "Course complete",
   doneNote: "Your results have been recorded. You may close this page.",
 
-  // One entry per video segment. Use direct links to .mp4 or .mov files.
-  // (MOV files play in Safari/iOS; for Chrome/Firefox/Android use MP4 / H.264.)
+  // One entry per video segment. videoType is "file" (direct .mp4/.mov URL), "youtube"
+  // (any YouTube URL), or "boxcast" (the BoxCast embed code or URL). `notes` is optional
+  // text shown under the video; notesCollapsed hides it behind a "Show notes" toggle.
   segments: [
     {
       title: "Section 1: Welcome",
+      videoType: "file",
       video: "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4",
+      notes: "Placeholder notes. Replace this text, or leave notes empty to hide the box.",
+      notesCollapsed: true,
       questions: [
         { q: "What color are the flowers in the video?",
           options: ["Red", "Yellow", "Blue", "White"], answer: 1 },
@@ -176,10 +193,13 @@ function showSegment(i){
   $("segmentCard").classList.remove("hidden");
   $("segTitle").textContent = seg.title;
   $("segCount").textContent = `Section ${i+1} of ${CONFIG.segments.length}`;
-  const v = $("video"); v.pause(); v.src = seg.video; v.load();
-  $("videoNote").textContent = CONFIG.requireFullWatch
+  const kind = renderVideo(seg);
+  // BoxCast and Google Drive players give no "ended" signal, so the quiz can't be gated on them.
+  if (kind === "boxcast" || kind === "gdrive") state.watched = true;
+  $("videoNote").textContent = (CONFIG.requireFullWatch && !state.watched)
     ? "Watch the full video to unlock the questions below."
     : "Answer the questions below to continue.";
+  renderNotes(seg);
   $("status").textContent = "";
   const quiz = $("quiz"); quiz.classList.toggle("locked", !state.watched);
   const f = $("quizForm"); f.innerHTML = "";
@@ -200,17 +220,140 @@ function showSegment(i){
   window.scrollTo({top:0, behavior:"smooth"});
 }
 
-$("video").addEventListener("ended", () => {
+/* ---------------- video players ---------------- */
+function videoEnded(){
+  if (state.watched) return;
   state.watched = true; $("quiz").classList.remove("locked");
   $("videoNote").textContent = "Video complete — answer the questions below.";
+}
+const gating = () => CONFIG.requireFullWatch && !state.watched;
+
+// Work out what kind of source a segment has. Older configs only have `video` (a file URL).
+function detectType(seg){
+  if (seg.videoType) return seg.videoType;
+  const v = seg.video || "";
+  if (/youtube\.com|youtu\.be/.test(v)) return "youtube";
+  if (/boxcast/.test(v)) return "boxcast";
+  if (/drive\.google\.com/.test(v)) return "gdrive";
+  return "file";
+}
+function driveId(input){
+  const m = (input||"").match(/\/d\/([A-Za-z0-9_-]{20,})/) || (input||"").match(/[?&]id=([A-Za-z0-9_-]{20,})/) || (input||"").match(/^([A-Za-z0-9_-]{20,})$/);
+  return m ? m[1] : null;
+}
+function youtubeId(input){
+  const m = (input||"").match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/|v\/))([A-Za-z0-9_-]{11})/)
+         || (input||"").match(/^([A-Za-z0-9_-]{11})$/);
+  return m ? m[1] : null;
+}
+
+let ytPlayer = null, ytPoll = null, ytLast = 0;
+function destroyPlayers(){
+  if (ytPoll) { clearInterval(ytPoll); ytPoll = null; }
+  if (ytPlayer && ytPlayer.destroy) { try { ytPlayer.destroy(); } catch(_){} }
+  ytPlayer = null; ytLast = 0;
+  $("videoWrap").innerHTML = "";
+}
+
+function renderVideo(seg){
+  destroyPlayers();
+  const wrap = $("videoWrap"), type = detectType(seg);
+
+  if (type === "youtube") {
+    const id = youtubeId(seg.video);
+    const host = document.createElement("div"); host.id = "ytHost"; wrap.appendChild(host);
+    loadYouTubeApi().then(() => {
+      ytPlayer = new YT.Player("ytHost", {
+        videoId: id, playerVars: { rel:0, modestbranding:1, playsinline:1, enablejsapi:1, origin: location.origin },
+        events: {
+          onStateChange: e => {
+            if (e.data === YT.PlayerState.ENDED) videoEnded();
+            if (e.data === YT.PlayerState.PLAYING && !ytPoll) {
+              // Discourage scrubbing ahead while the gate is active.
+              ytPoll = setInterval(() => {
+                if (!ytPlayer || !ytPlayer.getCurrentTime) return;
+                const t = ytPlayer.getCurrentTime();
+                if (gating() && t > ytLast + 2) ytPlayer.seekTo(ytLast, true); else ytLast = Math.max(ytLast, t);
+              }, 500);
+            }
+          }
+        }
+      });
+    });
+    return type;
+  }
+
+  if (type === "boxcast") {
+    const host = document.createElement("div"); host.className = "embed-host";
+    injectEmbed(host, seg.video); wrap.appendChild(host);
+    return type;
+  }
+
+  if (type === "gdrive") {
+    const f = document.createElement("iframe");
+    f.src = `https://drive.google.com/file/d/${driveId(seg.video)}/preview`;
+    f.allow = "autoplay; fullscreen"; f.allowFullscreen = true; wrap.appendChild(f);
+    return type;
+  }
+
+  // Default: direct MP4/MOV file.
+  const v = document.createElement("video"); v.controls = true; v.playsInline = true; v.preload = "metadata"; v.src = seg.video;
+  let last = 0;
+  v.addEventListener("ended", videoEnded);
+  v.addEventListener("timeupdate", () => { if (!v.seeking) last = v.currentTime; });
+  v.addEventListener("seeking", () => { if (gating() && v.currentTime > last + 1.5) v.currentTime = last; });
+  wrap.appendChild(v);
+  return type;
+}
+
+// Paste-in embeds (BoxCast gives either an <iframe> or a <script> snippet). Scripts inserted via
+// innerHTML don't run, so re-create them. A bare URL becomes an iframe.
+function injectEmbed(host, code){
+  code = (code || "").trim();
+  if (/^https?:\/\//i.test(code) && !/</.test(code)) {
+    const f = document.createElement("iframe"); f.src = code; f.allow = "autoplay; fullscreen; picture-in-picture"; f.allowFullscreen = true; host.appendChild(f); return;
+  }
+  const tpl = document.createElement("template"); tpl.innerHTML = code;
+  tpl.content.querySelectorAll("script").forEach(old => {
+    const s = document.createElement("script");
+    [...old.attributes].forEach(a => s.setAttribute(a.name, a.value));
+    s.textContent = old.textContent; old.replaceWith(s);
+  });
+  host.appendChild(tpl.content);
+}
+
+let ytApiPromise = null;
+function loadYouTubeApi(){
+  if (window.YT && window.YT.Player) return Promise.resolve();
+  if (!ytApiPromise) ytApiPromise = new Promise(res => {
+    window.onYouTubeIframeAPIReady = res;
+    const s = document.createElement("script"); s.src = "https://www.youtube.com/iframe_api"; document.head.appendChild(s);
+  });
+  return ytApiPromise;
+}
+
+/* ---------------- notes under the video ---------------- */
+function renderNotes(seg){
+  const box = $("notes"), body = $("notesBody"), tog = $("notesToggle");
+  const text = (seg.notes || "").trim();
+  box.classList.toggle("hidden", !text);
+  if (!text) return;
+  body.innerHTML = linkify(text);
+  const collapsed = !!seg.notesCollapsed;
+  tog.classList.toggle("hidden", !collapsed);
+  box.classList.toggle("collapsed", collapsed);
+  tog.setAttribute("aria-expanded", "false"); tog.textContent = seg.notesLabel || "Show notes";
+}
+$("notesToggle").addEventListener("click", () => {
+  const box = $("notes"), tog = $("notesToggle"), open = box.classList.toggle("collapsed") === false;
+  tog.setAttribute("aria-expanded", String(open));
+  const seg = CONFIG.segments[state.idx] || {};
+  tog.textContent = open ? (seg.notesHideLabel || "Hide notes") : (seg.notesLabel || "Show notes");
 });
-// Discourage scrubbing past unwatched content when full watch is required.
-let lastTime = 0;
-$("video").addEventListener("timeupdate", e => { if (!e.target.seeking) lastTime = e.target.currentTime; });
-$("video").addEventListener("seeking", e => {
-  const v = e.target;
-  if (CONFIG.requireFullWatch && !state.watched && v.currentTime > lastTime + 1.5) v.currentTime = lastTime;
-});
+function linkify(text){
+  const esc = s => s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  return esc(text).replace(/(https?:\/\/[^\s<]+)/g, u => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+}
 
 $("startForm").addEventListener("submit", e => {
   e.preventDefault();
