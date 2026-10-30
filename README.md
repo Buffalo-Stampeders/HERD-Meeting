@@ -21,6 +21,7 @@ Images uploaded in the dashboard are stored in a Google Drive folder named "<She
 |---|---|---|
 | MP4/MOV file URL | ✓ | ✓ |
 | YouTube | ✓ | ✓ |
+| Dropbox share link — streamed through our player; MP4, any size, shared "Anyone with the link" | ✓ | ✓ |
 | Google Drive (locked player) — streams the file through our player; MP4 only, **under 100 MB**, shared "Anyone with the link" | ✓ | ✓ |
 | Google Drive (Drive player) — any size | ✗ | ✗ |
 | BoxCast embed | ✗ | ✗ |

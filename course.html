@@ -314,7 +314,18 @@ function detectType(seg){
   if (/youtube\.com|youtu\.be/.test(v)) return "youtube";
   if (/boxcast/.test(v)) return "boxcast";
   if (/drive\.google\.com/.test(v)) return "gdrive";
+  if (/dropbox\.com/.test(v)) return "dropbox";
   return "file";
+}
+// Turn a Dropbox share link into a direct stream URL (dl.dropboxusercontent.com serves the raw file).
+function dropboxDirect(url){
+  try {
+    const u = new URL((url||"").trim());
+    if (!/(^|\.)dropbox\.com$/i.test(u.hostname) && !/dropboxusercontent\.com$/i.test(u.hostname)) return null;
+    if (/dropboxusercontent\.com$/i.test(u.hostname)) return u.href;
+    u.hostname = "dl.dropboxusercontent.com"; u.searchParams.delete("dl"); u.searchParams.delete("raw");
+    return u.href;
+  } catch (_) { return null; }
 }
 function driveId(input){
   const m = (input||"").match(/\/d\/([A-Za-z0-9_-]{20,})/) || (input||"").match(/[?&]id=([A-Za-z0-9_-]{20,})/) || (input||"").match(/^([A-Za-z0-9_-]{20,})$/);
@@ -370,6 +381,11 @@ function renderVideo(seg){
     return type;
   }
 
+  if (type === "dropbox") {
+    const direct = dropboxDirect(seg.video);
+    return renderFilePlayer(wrap, direct || seg.video, type);
+  }
+
   if (type === "gdrivefile") {
     // Direct MP4 stream from Drive (file must be "Anyone with the link"; ~100 MB max before Google's scan page blocks it).
     return renderFilePlayer(wrap, `https://drive.google.com/uc?export=download&id=${driveId(seg.video)}`, type);
@@ -397,7 +413,7 @@ function renderFilePlayer(wrap, src, type){
   if (lock) v.addEventListener("ratechange", () => { if (v.playbackRate !== 1) v.playbackRate = 1; });
   v.addEventListener("error", () => {
     const d = document.createElement("div"); d.className = "placeholder-default";
-    d.innerHTML = `<small>Video unavailable</small><div style="font-size:15px;font-family:var(--font-body);font-weight:400;color:#fff">This video could not be loaded. ${type === "gdrivefile" ? "Check that the Drive file is shared with “Anyone with the link”, is an MP4, and is under 100 MB." : ""}</div>`;
+    d.innerHTML = `<small>Video unavailable</small><div style="font-size:15px;font-family:var(--font-body);font-weight:400;color:#fff">This video could not be loaded. ${type === "gdrivefile" ? "Check that the Drive file is shared with “Anyone with the link”, is an MP4, and is under 100 MB." : type === "dropbox" ? "Check that the Dropbox link is shared with “Anyone with the link” and the file is an MP4." : ""}</div>`;
     wrap.innerHTML = ""; wrap.appendChild(d);
   });
   wrap.appendChild(v);
