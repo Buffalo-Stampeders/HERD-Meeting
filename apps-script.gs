@@ -38,6 +38,15 @@ function sheet(name) {
   return ss.getSheetByName(name) || ss.insertSheet(name);
 }
 function isAdmin(key) { return typeof key === "string" && key.length > 0 && key === ADMIN_KEY; }
+function imageFolder() {
+  // "<Sheet name> Images" folder beside the spreadsheet (created on first upload).
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const name = ss.getName() + " Images";
+  const parents = DriveApp.getFileById(ss.getId()).getParents();
+  const parent = parents.hasNext() ? parents.next() : DriveApp.getRootFolder();
+  const existing = parent.getFoldersByName(name);
+  return existing.hasNext() ? existing.next() : parent.createFolder(name);
+}
 
 /* ---------- GET: course config (public) and submissions (admin) ---------- */
 function doGet(e) {
@@ -76,6 +85,19 @@ function doPost(e) {
 
     if (data.action === "checkKey") {
       return json({ ok: isAdmin(data.key) });
+    }
+
+    // Image upload from admin.html: saved to a Drive folder next to this sheet, shared read-only
+    // by link, and served back as a direct image URL for the course page.
+    if (data.action === "uploadImage") {
+      if (!isAdmin(data.key)) return json({ ok: false, error: "Unauthorized" });
+      if (!data.data || !/^image\//.test(data.mime || "")) return json({ ok: false, error: "Not an image" });
+      const folder = imageFolder();
+      const safeName = String(data.name || "image").replace(/[^\w.\-]+/g, "_").slice(0, 80);
+      const blob = Utilities.newBlob(Utilities.base64Decode(data.data), data.mime, safeName);
+      const file = folder.createFile(blob);
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      return json({ ok: true, id: file.getId(), url: "https://lh3.googleusercontent.com/d/" + file.getId(), name: file.getName() });
     }
 
     // Default: log a quiz submission

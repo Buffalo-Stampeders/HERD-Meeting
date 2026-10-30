@@ -76,6 +76,12 @@
   .stat .l{font-size:11px;font-weight:700;color:var(--bronze);text-transform:uppercase;letter-spacing:2px;margin-top:4px}
   .hidden{display:none !important}
   .empty{color:var(--muted);text-align:center;padding:30px}
+  /* image list */
+  .imgrow{display:flex;gap:10px;align-items:center;padding:8px;border:1px solid var(--line);background:#fff;margin-bottom:6px}
+  .imgrow img{width:96px;height:64px;object-fit:cover;flex:none;background:#eee;cursor:zoom-in}
+  .imgfields{flex:1;display:flex;flex-direction:column;gap:4px;min-width:0}
+  .imgfields input{width:100%}
+  .imgbtns{display:flex;gap:4px;flex:none}
   /* rich editor */
   .rich{border:1px solid var(--line);background:#fff}
   .rich:focus-within{outline:2px solid var(--green);outline-offset:1px}
@@ -89,6 +95,7 @@
   .rich-body p{margin:0 0 8px} .rich-body ul,.rich-body ol{margin:0 0 8px;padding-left:24px}
   .rich-body blockquote{margin:8px 0;padding:8px 12px;border-left:4px solid var(--bronze);background:var(--cream)}
   .rich-body a{color:var(--green);text-decoration:underline}
+  .rich-body img{max-width:100%;height:auto;display:block;margin:6px 0}
   /* login gate */
   body.locked > :not(#gate){display:none !important}
   body:not(.locked) #gate{display:none}
@@ -177,6 +184,7 @@
 
     <div class="toolbar" style="margin:6px 0 10px">
       <h2>Modules</h2><span class="spacer"></span>
+      <button class="btn ghost sm" id="addPhotoBtn">+ Add photo module</button>
       <button class="btn ghost sm" id="addTextBtn">+ Add text section</button>
       <button class="btn sm" id="addModuleBtn">+ Add video module</button>
     </div>
@@ -342,9 +350,10 @@ function validate(){
     const n = `Module ${i+1}`;
     if (!s.title.trim()) p.push(`${n}: title is empty.`);
     if (s.type === "text") { if (!plainText(s.body)) p.push(`${n}: section text is empty.`); }
+    else if (s.type === "photo") { if (!(s.images||[]).some(im => im && /^https?:\/\//i.test(im.url||""))) p.push(`${n}: add at least one image.`); }
     else {
     const vt = segType(s), v = (s.video||"").trim();
-    if (!v) p.push(`${n}: video is empty.`);
+    if (!v) { /* allowed: placeholder image (or default card) is shown instead */ }
     else if (vt === "youtube" && !youtubeId(v)) p.push(`${n}: not a valid YouTube link.`);
     else if (vt === "gdrive" && !driveId(v)) p.push(`${n}: not a valid Google Drive file link.`);
     else if (vt === "boxcast" && !/boxcast|<iframe|<script/i.test(v)) p.push(`${n}: paste the BoxCast embed code or a boxcast.tv URL.`);
@@ -429,6 +438,7 @@ function richEditor(host, html, onChange){
       <button type="button" data-cmd="formatBlock" data-val="blockquote" title="Callout">❝</button>
       <span class="sep"></span>
       <button type="button" data-link title="Insert link">Link</button>
+      <button type="button" data-img title="Insert image">Image</button>
       <button type="button" data-cmd="unlink" title="Remove link">Unlink</button>
       <button type="button" data-cmd="removeFormat" title="Clear formatting">Clear</button>
     </div>
@@ -445,10 +455,68 @@ function richEditor(host, html, onChange){
     e.preventDefault(); body.focus();
     if (b.dataset.block) document.execCommand("formatBlock", false, b.dataset.block);
     else if (b.dataset.link !== undefined) { const url = prompt("Link URL (https://…)"); if (url) document.execCommand("createLink", false, url); }
+    else if (b.dataset.img !== undefined) {
+      const inp = document.createElement("input"); inp.type = "file"; inp.accept = "image/*";
+      inp.onchange = async () => { const f = inp.files[0]; if (!f) return; const sel = saveSel();
+        try { setMsg(`Uploading ${f.name}…`); const url = await uploadImage(f); restoreSel(sel); document.execCommand("insertHTML", false, `<img src="${url}" alt="">`); emit(); setMsg("Image inserted.", "ok"); }
+        catch (err) { setMsg("Image upload failed: " + err.message, "bad"); } };
+      inp.click(); return;
+    }
     else document.execCommand(b.dataset.cmd, false, b.dataset.val || null);
     emit();
   }));
 }
+/* ---------------- images: client-side resize + upload to Drive via the backend ---------------- */
+function resizeImage(file, max = 1800){
+  return new Promise((res, rej) => {
+    const img = new Image(); const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, max / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+      const c = document.createElement("canvas"); c.width = w; c.height = h; c.getContext("2d").drawImage(img, 0, 0, w, h);
+      const isPng = /png/i.test(file.type) && file.size < 1.5e6;
+      const dataUrl = c.toDataURL(isPng ? "image/png" : "image/jpeg", 0.86);
+      res({ mime: isPng ? "image/png" : "image/jpeg", data: dataUrl.split(",")[1], name: file.name.replace(/\.[^.]+$/, "") + (isPng ? ".png" : ".jpg") });
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error("Couldn't read " + file.name)); };
+    img.src = url;
+  });
+}
+async function uploadImage(file, onStatus){
+  onStatus && onStatus(`Preparing ${file.name}…`);
+  const r = await resizeImage(file);
+  onStatus && onStatus(`Uploading ${file.name}…`);
+  const out = await api({}, { action:"uploadImage", key: conn.key, name: r.name, mime: r.mime, data: r.data });
+  if (!out.ok) throw new Error(out.error || "Upload failed");
+  return out.url;
+}
+function renderImageList(host, seg){
+  host.innerHTML = "";
+  const meta = host.closest(".module")?.querySelector(".module-head .meta");
+  if (meta) { const n = (seg.images||[]).length; meta.textContent = `${n} photo${n===1?"":"s"} · ` + (seg.noQuiz ? "no quiz" : seg.questions.length + " question" + (seg.questions.length===1?"":"s")); }
+  (seg.images || []).forEach((im, k) => {
+    const row = document.createElement("div"); row.className = "imgrow";
+    row.innerHTML = `<img src="${esc(im.url)}" alt="">
+      <div class="imgfields"><input type="text" value="${esc(im.caption||"")}" placeholder="Caption (optional)" data-cap><input type="text" value="${esc(im.url)}" data-url style="font-size:12px;color:var(--muted)"></div>
+      <div class="imgbtns"><button class="btn ghost sm" data-k="up" ${k===0?"disabled":""}>&uarr;</button><button class="btn ghost sm" data-k="down" ${k===seg.images.length-1?"disabled":""}>&darr;</button><button class="btn danger sm" data-k="del">&times;</button></div>`;
+    row.querySelector("img").addEventListener("click", () => window.open(im.url, "_blank"));
+    row.querySelector("[data-cap]").addEventListener("input", e => { im.caption = e.target.value; markDirty(); });
+    row.querySelector("[data-url]").addEventListener("change", e => { im.url = e.target.value.trim(); markDirty(); renderImageList(host, seg); });
+    row.querySelectorAll("[data-k]").forEach(b => b.addEventListener("click", () => {
+      const a = seg.images;
+      if (b.dataset.k === "del") a.splice(k, 1);
+      else if (b.dataset.k === "up") [a[k-1], a[k]] = [a[k], a[k-1]];
+      else [a[k+1], a[k]] = [a[k], a[k+1]];
+      markDirty(); renderImageList(host, seg);
+    }));
+    host.appendChild(row);
+  });
+  if (!(seg.images || []).length) host.innerHTML = `<div class="hint" style="padding:10px;border:1px dashed var(--line)">No images yet — upload some or add by URL.</div>`;
+}
+
+function saveSel(){ const s = getSelection(); return s.rangeCount ? s.getRangeAt(0) : null; }
+function restoreSel(r){ if (!r) return; const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
 const plainText = html => { const d = document.createElement("div"); d.innerHTML = html || ""; return d.textContent.trim(); };
 
 function renderModules(){
@@ -456,13 +524,13 @@ function renderModules(){
   $("noModules").classList.toggle("hidden", config.segments.length > 0);
   const CONFIG_FULLWATCH_NOTE = config.requireFullWatch ? " (after the video ends, where the player supports it)" : "";
   config.segments.forEach((seg, i) => {
-    const vt = segType(seg), st = seg.type === "text" ? "text" : "video";
+    const vt = segType(seg), st = seg.type === "text" ? "text" : seg.type === "photo" ? "photo" : "video";
     const m = document.createElement("div"); m.className = "module" + (openModules.has(i) ? " open" : "");
     m.innerHTML = `
       <div class="module-head">
         <span class="num">${i+1}</span>
         <span class="title">${esc(seg.title) || "<em>Untitled module</em>"}</span>
-        <span class="meta">${st==="text"?"Text · ":""}${seg.noQuiz ? "no quiz" : seg.questions.length + " question" + (seg.questions.length===1?"":"s")}</span>
+        <span class="meta">${st==="text"?"Text · ":st==="photo"?`${(seg.images||[]).length} photo${(seg.images||[]).length===1?"":"s"} · `:(seg.video||"").trim()?"":"No video · "}${seg.noQuiz ? "no quiz" : seg.questions.length + " question" + (seg.questions.length===1?"":"s")}</span>
         <button class="btn ghost sm" data-act="up" ${i===0?"disabled":""} title="Move up">&uarr;</button>
         <button class="btn ghost sm" data-act="down" ${i===config.segments.length-1?"disabled":""} title="Move down">&darr;</button>
         <button class="btn ghost sm" data-act="dup" title="Duplicate">Copy</button>
@@ -472,10 +540,20 @@ function renderModules(){
         <div class="row">
           <div style="flex:0;min-width:170px">
             <label>Section type</label>
-            <select data-f="type"><option value="video" ${st==="video"?"selected":""}>Video</option><option value="text" ${st==="text"?"selected":""}>Text only</option></select>
+            <select data-f="type"><option value="video" ${st==="video"?"selected":""}>Video</option><option value="photo" ${st==="photo"?"selected":""}>Photo(s)</option><option value="text" ${st==="text"?"selected":""}>Text only</option></select>
           </div>
           <div style="flex:1"><label>${st==="text"?"Section header":"Module title"}</label>
             <input type="text" data-f="title" value="${esc(seg.title)}" placeholder="${st==="text"?"e.g. Before we begin":"e.g. Section 1: Welcome"}"></div>
+        </div>
+        <div class="${st==="photo"?"":"hidden"}">
+          <label>Images <span style="font-weight:400;letter-spacing:0;text-transform:none;color:var(--muted)">(one image shows on its own; several become a slideshow — learners can click any image to enlarge it)</span></label>
+          <div class="imglist" data-imglist></div>
+          <div class="toolbar" style="margin-top:8px">
+            <button class="btn sm" data-act="uploadimgs">Upload image(s)</button>
+            <button class="btn ghost sm" data-act="addimgurl">Add by URL</button>
+            <input type="file" accept="image/*" multiple class="hidden" data-imgfile>
+            <span class="hint" data-upstatus></span>
+          </div>
         </div>
         <div class="${st==="text"?"":"hidden"}">
           <label>Section text</label>
@@ -499,8 +577,16 @@ function renderModules(){
         </div>
         <div class="hint video-hint">${VIDEO_TYPES[vt].hint}</div>
         <div class="preview hidden"></div>
-
-        <label>Notes under the video <span style="font-weight:400;letter-spacing:0;text-transform:none;color:var(--muted)">(optional)</span></label>
+        <label>Placeholder image <span style="font-weight:400;letter-spacing:0;text-transform:none;color:var(--muted)">(optional — shown instead of the player while the video field above is empty)</span></label>
+        <div class="row" style="align-items:center">
+          ${seg.placeholderImage ? `<img src="${esc(seg.placeholderImage)}" alt="" style="flex:0;width:120px;height:68px;object-fit:cover;border:1px solid var(--line)">` : ""}
+          <input type="text" data-f="placeholderImage" value="${esc(seg.placeholderImage||"")}" placeholder="https://…/image.jpg" style="flex:3">
+          <div style="flex:0"><button class="btn ghost sm" data-act="uploadplaceholder">Upload</button><input type="file" accept="image/*" class="hidden" data-phfile></div>
+          <span class="hint" data-phstatus style="flex:0;white-space:nowrap"></span>
+        </div>
+        </div>
+        <div class="${st!=="text"?"":"hidden"}">
+        <label>Notes under the ${st==="photo"?"images":"video"} <span style="font-weight:400;letter-spacing:0;text-transform:none;color:var(--muted)">(optional)</span></label>
         <div class="rich" data-rich="notes"></div>
         <div class="row" style="align-items:center">
           <div class="check"><input type="checkbox" data-f="notesCollapsed" ${seg.notesCollapsed?"checked":""}><span>Hide notes behind a toggle</span></div>
@@ -519,6 +605,23 @@ function renderModules(){
     const qHost = m.querySelector(".questions");
     seg.questions.forEach((q, qi) => qHost.appendChild(renderQuestion(i, qi, q)));
     m.querySelectorAll("[data-rich]").forEach(el => richEditor(el, seg[el.dataset.rich] || "", html => { seg[el.dataset.rich] = html; markDirty(); }));
+    const imgHost = st === "photo" ? m.querySelector("[data-imglist]") : null; if (imgHost) renderImageList(imgHost, seg);
+    const imgFile = m.querySelector("[data-imgfile]"), upStatus = m.querySelector("[data-upstatus]");
+    if (imgFile) imgFile.addEventListener("change", async e => {
+      const files = [...e.target.files]; e.target.value = ""; if (!files.length) return;
+      seg.images = seg.images || [];
+      for (const f of files) {
+        try { const url = await uploadImage(f, t => upStatus.textContent = t); seg.images.push({ url, caption:"" }); markDirty(); renderImageList(imgHost, seg); }
+        catch (err) { upStatus.textContent = err.message; alert(`${f.name}: ${err.message}`); return; }
+      }
+      upStatus.textContent = `Uploaded ${files.length} image${files.length===1?"":"s"}.`;
+    });
+    const phFile = m.querySelector("[data-phfile]"), phStatus = m.querySelector("[data-phstatus]");
+    if (phFile) phFile.addEventListener("change", async e => {
+      const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+      try { seg.placeholderImage = await uploadImage(f, t => phStatus.textContent = t); markDirty(); renderModules(); }
+      catch (err) { phStatus.textContent = err.message; }
+    });
 
     m.querySelector(".module-head").addEventListener("click", e => {
       if (e.target.closest("button")) return;
@@ -543,6 +646,9 @@ function renderModules(){
       else if (act==="down") { swap(i, i+1); }
       else if (act==="dup") { config.segments.splice(i+1,0,JSON.parse(JSON.stringify(seg))); openModules.add(i+1); }
       else if (act==="addq") { seg.questions.push({ q:"", options:["","","",""], answer:0 }); openModules.add(i); }
+      else if (act==="uploadimgs") { m.querySelector("[data-imgfile]").click(); return; }
+      else if (act==="uploadplaceholder") { m.querySelector("[data-phfile]").click(); return; }
+      else if (act==="addimgurl") { const u = prompt("Image URL (https://…)"); if (!u) return; seg.images = seg.images || []; seg.images.push({ url: u.trim(), caption:"" }); markDirty(); renderImageList(m.querySelector("[data-imglist]"), seg); return; }
       else if (act==="preview") { const pv = m.querySelector(".preview"); pv.classList.toggle("hidden"); pv.innerHTML = ""; if (!pv.classList.contains("hidden")) renderPreview(pv, seg); return; }
       markDirty(); renderModules();
     }));
@@ -602,6 +708,7 @@ function addSegment(seg){
 }
 $("addModuleBtn").addEventListener("click", () => addSegment({ type:"video", title:`Section ${config.segments.length+1}`, videoType:"file", video:"", notes:"", notesCollapsed:false, notesLabel:"", noQuiz:false, questions:[{ q:"", options:["","","",""], answer:0 }] }));
 $("addTextBtn").addEventListener("click", () => addSegment({ type:"text", title:"", body:"", noQuiz:true, questions:[] }));
+$("addPhotoBtn").addEventListener("click", () => addSegment({ type:"photo", title:`Section ${config.segments.length+1}`, images:[], notes:"", notesCollapsed:false, notesLabel:"", noQuiz:true, questions:[] }));
 $("saveBtn").addEventListener("click", publish);
 $("reloadBtn").addEventListener("click", () => { if (dirty && !confirm("Discard unpublished changes and reload?")) return; loadConfig(); });
 $("connectBtn").addEventListener("click", connect);

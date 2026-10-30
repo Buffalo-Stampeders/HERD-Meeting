@@ -9,7 +9,11 @@ Gated video training: learners enter name + email, watch each video segment, and
 
 ## Section types
 
-A section is either a **video module** or a **text-only section** (a header plus rich text — headings, bold, lists, links, callouts). Either kind can carry quiz questions or be set to "No questions" so the learner just clicks Continue.
+A section is a **video module**, a **photo module** (one image or a slideshow — learners click to enlarge), or a **text-only section** (a header plus rich text). Any kind can carry quiz questions or be set to "No questions" so the learner just clicks Continue. A video module may be published without a video; a placeholder image (or a branded "coming soon" card) shows until one is added.
+
+## Images
+
+Images uploaded in the dashboard are stored in a Google Drive folder named "<Sheet name> Images" next to the spreadsheet, shared read-only by link, and resized to a max of 1800px before upload. You can also reference any image by URL.
 
 ## Video sources
 

@@ -46,6 +46,31 @@
   .rich-html blockquote{margin:12px 0;padding:10px 14px;border-left:4px solid var(--bronze);background:var(--cream-light)}
   .rich-html a{color:var(--green);font-weight:600}
   .text-body{background:#fff;border:1px solid var(--line);padding:22px 24px}
+  /* placeholder image in a video module */
+  .video-wrap .placeholder{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;cursor:zoom-in;background:var(--green)}
+  .video-wrap .placeholder-default{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:var(--green);color:var(--tan);font-family:var(--font-head);font-weight:800;font-size:22px;text-align:center;padding:20px}
+  .video-wrap .placeholder-default small{font-family:var(--font-body);font-weight:700;font-size:11px;letter-spacing:3px;text-transform:uppercase;color:var(--bronze)}
+  /* photo gallery */
+  .gallery-stage{position:relative;background:#000;aspect-ratio:16/9;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .gallery-stage img{max-width:100%;max-height:100%;object-fit:contain;cursor:zoom-in;display:block}
+  .gal-nav,.lb-nav{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:64px;border:0;background:rgba(0,0,0,.45);color:#fff;font-size:40px;line-height:1;cursor:pointer;transition:background .15s}
+  .gal-nav:hover,.lb-nav:hover{background:var(--green)}
+  .gal-nav.prev,.lb-nav.prev{left:0} .gal-nav.next,.lb-nav.next{right:0}
+  .gallery.single .gal-nav,.gallery.single .gallery-thumbs{display:none}
+  .gal-expand{position:absolute;right:10px;bottom:10px;background:rgba(0,0,0,.5);color:#fff;font-size:16px;padding:4px 8px;pointer-events:none}
+  .gallery-caption{font-size:14px;color:var(--muted);padding:8px 2px;min-height:1.4em}
+  .gallery-thumbs{display:flex;gap:6px;flex-wrap:wrap}
+  .gallery-thumbs img{width:72px;height:48px;object-fit:cover;border:2px solid transparent;cursor:pointer;opacity:.7}
+  .gallery-thumbs img.active{border-color:var(--green);opacity:1}
+  /* lightbox */
+  .lightbox{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:100;display:flex;align-items:center;justify-content:center;padding:16px}
+  .lightbox figure{margin:0;max-width:95vw;max-height:92vh;display:flex;flex-direction:column;align-items:center;gap:10px}
+  .lightbox img{max-width:95vw;max-height:84vh;object-fit:contain;box-shadow:0 10px 40px rgba(0,0,0,.6)}
+  .lightbox figcaption{color:var(--tan);font-size:15px;text-align:center}
+  .lb-close{position:absolute;top:10px;right:14px;background:transparent;border:0;color:#fff;font-size:44px;line-height:1;cursor:pointer}
+  .lb-count{position:absolute;top:22px;left:20px;color:var(--bronze);font-size:11px;font-weight:700;letter-spacing:3px}
+  .lightbox.single .lb-nav,.lightbox.single .lb-count{display:none}
+  @media (max-width:600px){ .gal-nav,.lb-nav{width:36px;height:52px;font-size:30px} }
   .notes{margin-top:14px;border:1px solid var(--line);background:#fff}
   .notes-toggle{display:block;width:100%;text-align:left;font:inherit;font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--green);background:var(--cream-light);border:0;padding:11px 14px;cursor:pointer}
   .notes-toggle::before{content:"▸";display:inline-block;margin-right:8px;transition:transform .15s}
@@ -104,6 +129,16 @@
     </div>
     <div class="video-wrap" id="videoWrap"></div>
     <div class="text-body rich-html hidden" id="textBody"></div>
+    <div class="gallery hidden" id="gallery">
+      <div class="gallery-stage">
+        <button type="button" class="gal-nav prev" id="galPrev" aria-label="Previous image">&#8249;</button>
+        <img id="galImg" alt="">
+        <button type="button" class="gal-nav next" id="galNext" aria-label="Next image">&#8250;</button>
+        <span class="gal-expand" aria-hidden="true">&#x26F6;</span>
+      </div>
+      <div class="gallery-caption" id="galCaption"></div>
+      <div class="gallery-thumbs" id="galThumbs"></div>
+    </div>
     <p class="note" id="videoNote"></p>
     <div class="notes hidden" id="notes">
       <button type="button" class="notes-toggle hidden" id="notesToggle" aria-expanded="false">Show notes</button>
@@ -114,6 +149,15 @@
       <div class="status" id="status"></div>
     </div>
   </section>
+
+  <!-- Lightbox -->
+  <div class="lightbox hidden" id="lightbox" role="dialog" aria-modal="true">
+    <button type="button" class="lb-close" id="lbClose" aria-label="Close">&times;</button>
+    <button type="button" class="lb-nav prev" id="lbPrev" aria-label="Previous">&#8249;</button>
+    <figure><img id="lbImg" alt=""><figcaption id="lbCaption"></figcaption></figure>
+    <button type="button" class="lb-nav next" id="lbNext" aria-label="Next">&#8250;</button>
+    <div class="lb-count" id="lbCount"></div>
+  </div>
 
   <!-- Done -->
   <section class="card done-card hidden" id="doneCard">
@@ -200,21 +244,33 @@ function showSegment(i){
   $("segmentCard").classList.remove("hidden");
   $("segTitle").textContent = seg.title;
   $("segCount").textContent = `Section ${i+1} of ${CONFIG.segments.length}`;
-  const isText = seg.type === "text";
-  $("videoWrap").classList.toggle("hidden", isText); $("textBody").classList.toggle("hidden", !isText);
+  const st = seg.type === "text" ? "text" : seg.type === "photo" ? "photo" : "video";
+  $("videoWrap").classList.toggle("hidden", st !== "video"); $("textBody").classList.toggle("hidden", st !== "text"); $("gallery").classList.toggle("hidden", st !== "photo");
   const noQuiz = isNoQuiz(seg);
-  if (isText) {
+  const answerNote = noQuiz ? "" : "Answer the questions below to continue.";
+  if (st === "text") {
     destroyPlayers(); state.watched = true;
     $("textBody").innerHTML = sanitize(seg.body || "");
-    $("videoNote").textContent = noQuiz ? "" : "Answer the questions below to continue.";
+    $("videoNote").textContent = answerNote;
     $("notes").classList.add("hidden");
+  } else if (st === "photo") {
+    destroyPlayers(); state.watched = true;
+    renderGallery(seg);
+    $("videoNote").textContent = answerNote;
+    renderNotes(seg);
+  } else if (!(seg.video || "").trim()) {
+    // Video module with no video yet: show the placeholder image instead.
+    destroyPlayers(); state.watched = true;
+    renderPlaceholder(seg);
+    $("videoNote").textContent = answerNote;
+    renderNotes(seg);
   } else {
     const kind = renderVideo(seg);
     // BoxCast and Google Drive players give no "ended" signal, so the quiz can't be gated on them.
     if (kind === "boxcast" || kind === "gdrive") state.watched = true;
     $("videoNote").textContent = (CONFIG.requireFullWatch && !state.watched)
       ? (noQuiz ? "Watch the full video to continue." : "Watch the full video to unlock the questions below.")
-      : (noQuiz ? "" : "Answer the questions below to continue.");
+      : answerNote;
     renderNotes(seg);
   }
   $("status").textContent = "";
@@ -351,6 +407,72 @@ function loadYouTubeApi(){
   return ytApiPromise;
 }
 
+/* ---------------- placeholder, gallery, lightbox ---------------- */
+function renderPlaceholder(seg){
+  const wrap = $("videoWrap"); wrap.innerHTML = "";
+  const url = (seg.placeholderImage || "").trim();
+  if (url) {
+    const img = document.createElement("img"); img.className = "placeholder"; img.src = url; img.alt = seg.title || "";
+    img.addEventListener("click", () => openLightbox([{ url, caption: seg.title || "" }], 0));
+    wrap.appendChild(img);
+  } else {
+    const d = document.createElement("div"); d.className = "placeholder-default";
+    d.innerHTML = `<small>Video coming soon</small><div>${esc(seg.title || "")}</div>`;
+    wrap.appendChild(d);
+  }
+}
+
+let gal = { images: [], idx: 0 };
+function renderGallery(seg){
+  gal.images = (seg.images || []).filter(im => im && im.url); gal.idx = 0;
+  const g = $("gallery"); g.classList.toggle("single", gal.images.length <= 1);
+  const th = $("galThumbs"); th.innerHTML = "";
+  gal.images.forEach((im, i) => { const t = document.createElement("img"); t.src = im.url; t.alt = ""; t.addEventListener("click", () => showGal(i)); th.appendChild(t); });
+  showGal(0);
+}
+function showGal(i){
+  if (!gal.images.length) { $("galImg").removeAttribute("src"); $("galCaption").textContent = ""; return; }
+  gal.idx = (i + gal.images.length) % gal.images.length;
+  const im = gal.images[gal.idx];
+  $("galImg").src = im.url; $("galImg").alt = im.caption || "";
+  $("galCaption").textContent = (gal.images.length > 1 ? `${gal.idx+1} / ${gal.images.length}` + (im.caption ? " — " : "") : "") + (im.caption || "");
+  [...$("galThumbs").children].forEach((t, k) => t.classList.toggle("active", k === gal.idx));
+}
+$("galPrev").addEventListener("click", () => showGal(gal.idx - 1));
+$("galNext").addEventListener("click", () => showGal(gal.idx + 1));
+$("galImg").addEventListener("click", () => openLightbox(gal.images, gal.idx));
+
+let lb = { images: [], idx: 0 };
+function openLightbox(images, idx){
+  lb.images = images; lb.idx = idx;
+  $("lightbox").classList.toggle("single", images.length <= 1);
+  showLb(idx); $("lightbox").classList.remove("hidden"); document.body.style.overflow = "hidden";
+  $("lbClose").focus();
+}
+function showLb(i){
+  lb.idx = (i + lb.images.length) % lb.images.length;
+  const im = lb.images[lb.idx];
+  $("lbImg").src = im.url; $("lbImg").alt = im.caption || ""; $("lbCaption").textContent = im.caption || "";
+  $("lbCount").textContent = `${lb.idx+1} / ${lb.images.length}`;
+}
+function closeLightbox(){ $("lightbox").classList.add("hidden"); document.body.style.overflow = ""; }
+$("lbClose").addEventListener("click", closeLightbox);
+$("lbPrev").addEventListener("click", e => { e.stopPropagation(); showLb(lb.idx - 1); });
+$("lbNext").addEventListener("click", e => { e.stopPropagation(); showLb(lb.idx + 1); });
+$("lightbox").addEventListener("click", e => { if (e.target === $("lightbox") || e.target.tagName === "FIGURE") closeLightbox(); });
+document.addEventListener("keydown", e => {
+  if ($("lightbox").classList.contains("hidden")) return;
+  if (e.key === "Escape") closeLightbox();
+  else if (e.key === "ArrowLeft") showLb(lb.idx - 1);
+  else if (e.key === "ArrowRight") showLb(lb.idx + 1);
+});
+// Images inside rich text (notes / text sections) also open in the lightbox.
+document.addEventListener("click", e => {
+  const img = e.target.closest(".rich-html img"); if (!img) return;
+  openLightbox([{ url: img.src, caption: img.alt || "" }], 0);
+});
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
 /* ---------------- notes under the video ---------------- */
 function renderNotes(seg){
   const box = $("notes"), body = $("notesBody"), tog = $("notesToggle");
@@ -373,7 +495,7 @@ $("notesToggle").addEventListener("click", () => {
 });
 // Allow-list sanitizer for admin-authored HTML (headings, lists, links, emphasis only).
 function sanitize(html){
-  const ALLOWED = { P:[], BR:[], B:[], STRONG:[], I:[], EM:[], U:[], H2:[], H3:[], UL:[], OL:[], LI:[], BLOCKQUOTE:[], A:["href"], DIV:[], SPAN:[] };
+  const ALLOWED = { P:[], BR:[], B:[], STRONG:[], I:[], EM:[], U:[], H2:[], H3:[], UL:[], OL:[], LI:[], BLOCKQUOTE:[], A:["href"], IMG:["src","alt"], DIV:[], SPAN:[] };
   const doc = new DOMParser().parseFromString("<body>" + html, "text/html");
   const walk = node => {
     [...node.childNodes].forEach(ch => {
@@ -381,6 +503,7 @@ function sanitize(html){
       if (ch.nodeType !== 1 || !(ch.tagName in ALLOWED)) { ch.replaceWith(...(ch.childNodes ? [...ch.childNodes] : [])); return walk(node); }
       [...ch.attributes].forEach(a => { if (!ALLOWED[ch.tagName].includes(a.name)) ch.removeAttribute(a.name); });
       if (ch.tagName === "A") { const h = ch.getAttribute("href") || ""; if (!/^https?:\/\/|^mailto:/i.test(h)) ch.removeAttribute("href"); else { ch.target = "_blank"; ch.rel = "noopener"; } }
+      if (ch.tagName === "IMG") { const src = ch.getAttribute("src") || ""; if (!/^https?:\/\//i.test(src)) { ch.remove(); return walk(node); } ch.style.cssText = "max-width:100%;height:auto;cursor:zoom-in"; }
       walk(ch);
     });
   };
@@ -388,7 +511,6 @@ function sanitize(html){
   return doc.body.innerHTML;
 }
 function linkify(text){
-  const esc = s => s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   return esc(text).replace(/(https?:\/\/[^\s<]+)/g, u => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
 }
 
