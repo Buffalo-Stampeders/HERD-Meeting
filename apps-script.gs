@@ -17,7 +17,10 @@
  * (The URL stays the same; without a new version the live app keeps the old code.)
  *
  * Sheets created automatically:  "Submissions" (one row per quiz attempt)
- *                                 "Config"      (A2 holds the course JSON)
+ *                                 "Config"      (course JSON, split across A2, A3, … to stay under
+ *                                                Google Sheets' 50,000-character cell limit)
+ *
+ * Translation uses Google Translate through Apps Script's built-in LanguageApp — no API key needed.
  */
 
 const ADMIN_KEY = "change-me-to-a-long-secret";   // <-- change this
@@ -27,8 +30,9 @@ const CFG_SHEET = "Config";
 const COLUMNS = [
   "submittedAt", "submittedAtLocal", "name", "email", "course",
   "segment", "segmentTitle", "attempt", "score", "passed",
-  "answers", "secondsOnSegment", "completedCourse"
+  "answers", "secondsOnSegment", "completedCourse", "language"
 ];
+const CHUNK = 45000;   // characters per Config cell
 
 function json(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
@@ -53,8 +57,9 @@ function doGet(e) {
   const p = (e && e.parameter) || {};
   if (p.action === "config") {
     const s = sheet(CFG_SHEET);
-    const raw = s.getRange("A2").getValue();
-    return json({ ok: true, config: raw ? JSON.parse(raw) : null, updatedAt: s.getRange("B2").getValue() || null });
+    const last = s.getLastRow();
+    const raw = last >= 2 ? s.getRange(2, 1, last - 1, 1).getValues().map(r => r[0]).join("") : "";
+    return json({ ok: true, config: raw ? JSON.parse(raw) : null, updatedAt: last >= 2 ? (s.getRange("B2").getValue() || null) : null });
   }
   if (p.action === "submissions") {
     if (!isAdmin(p.key)) return json({ ok: false, error: "Unauthorized" });
@@ -67,20 +72,32 @@ function doGet(e) {
 
 /* ---------- POST: save config (admin) or log a submission (public) ---------- */
 function doPost(e) {
-  const lock = LockService.getScriptLock();
-  lock.waitLock(10000);
-  try {
-    const data = JSON.parse(e.postData.contents);
+  let data;
+  try { data = JSON.parse(e.postData.contents); } catch (err) { return json({ ok: false, error: "Bad request" }); }
 
+  // Read-only / slow actions run without the script lock so they never hold up learners' submissions.
+  if (data.action === "translate") {
+    if (!isAdmin(data.key)) return json({ ok: false, error: "Unauthorized" });
+    try { return json({ ok: true, results: translateItems(data.items || [], data.source || "en", String(data.target || "")) }); }
+    catch (err) { return json({ ok: false, error: String(err) }); }
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
     if (data.action === "saveConfig") {
       if (!isAdmin(data.key)) return json({ ok: false, error: "Unauthorized" });
       if (!data.config || !Array.isArray(data.config.segments)) return json({ ok: false, error: "Invalid config" });
       const s = sheet(CFG_SHEET);
       if (s.getLastRow() === 0) { s.appendRow(["courseJson", "updatedAt"]); s.getRange(1,1,1,2).setFontWeight("bold"); }
       const now = new Date().toISOString();
-      s.getRange("A2").setValue(JSON.stringify(data.config));
+      const text = JSON.stringify(data.config);
+      const parts = [];
+      for (let i = 0; i < text.length; i += CHUNK) parts.push([text.slice(i, i + CHUNK)]);
+      if (s.getLastRow() >= 2) s.getRange(2, 1, s.getLastRow() - 1, 2).clearContent();
+      s.getRange(2, 1, parts.length, 1).setNumberFormat("@").setValues(parts);
       s.getRange("B2").setValue(now);
-      return json({ ok: true, updatedAt: now });
+      return json({ ok: true, updatedAt: now, cells: parts.length });
     }
 
     if (data.action === "checkKey") {
@@ -119,6 +136,8 @@ function doPost(e) {
       s.appendRow(COLUMNS);
       s.getRange(1, 1, 1, COLUMNS.length).setFontWeight("bold");
       s.setFrozenRows(1);
+    } else if (s.getLastColumn() < COLUMNS.length) {
+      s.getRange(1, 1, 1, COLUMNS.length).setValues([COLUMNS]).setFontWeight("bold");   // add new columns to an older sheet
     }
     s.appendRow(COLUMNS.map(k => (k in data) ? data[k] : ""));
     return json({ ok: true });
@@ -127,4 +146,42 @@ function doPost(e) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/* ---------- Translation (Google Translate via LanguageApp) ---------- */
+// items: [{ id, text, html }]. Plain-text items are escaped and batched together inside <section> tags
+// so one LanguageApp call translates many strings; rich-text (html) items are sent as HTML.
+function translateItems(items, source, target) {
+  if (!target) throw new Error("No target language");
+  const out = {};
+  const esc = t => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
+  const unesc = h => String(h).replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "")
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&");
+  const LIMIT = 4000;
+  let batch = [], size = 0;
+  const flush = () => {
+    if (!batch.length) return;
+    const html = batch.map((it, k) => '<section id="t' + k + '">' + (it.html ? it.text : esc(it.text)) + "</section>").join("");
+    let res = null;
+    try { res = LanguageApp.translate(html, source, target, { contentType: "html" }); } catch (e) { res = null; }
+    const found = {};
+    if (res) { const re = /<section id="?t(\d+)"?>([\s\S]*?)<\/section>/gi; let m; while ((m = re.exec(res))) found[m[1]] = m[2]; }
+    batch.forEach((it, k) => {
+      let t = found[k];
+      if (t === undefined) {   // batch didn't round-trip cleanly: translate this one on its own
+        try { t = LanguageApp.translate(it.html ? it.text : esc(it.text), source, target, { contentType: "html" }); } catch (e) { t = null; }
+      }
+      out[it.id] = t === null ? { error: true } : { t: it.html ? t.trim() : unesc(t).trim() };
+    });
+    batch = []; size = 0;
+  };
+  items.forEach(it => {
+    if (!it || !String(it.text || "").trim()) { if (it) out[it.id] = { t: "" }; return; }
+    const len = String(it.text).length + 30;
+    if (size + len > LIMIT) flush();
+    batch.push(it); size += len;
+    if (size > LIMIT) flush();
+  });
+  flush();
+  return out;
 }

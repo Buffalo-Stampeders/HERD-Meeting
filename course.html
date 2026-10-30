@@ -97,6 +97,19 @@
   .done-card h2{color:#fff} .done-card .note{color:var(--tan)}
   .done-card .big{font-size:56px;color:var(--tan);font-family:var(--font-head);font-weight:800;line-height:1}
   .hidden{display:none !important}
+  .header-right{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+  .lang-wrap{display:flex;align-items:center;gap:6px;margin:0;font-size:16px;letter-spacing:0;text-transform:none}
+  .lang-pick{font:inherit;font-size:13px;font-weight:600;color:var(--green);border:1px solid var(--bronze);background:#fff;padding:5px 8px;border-radius:3px;cursor:pointer}
+  /* captions overlay for YouTube / Vimeo */
+  .cc-overlay{position:absolute;left:0;right:0;bottom:13%;display:flex;justify-content:center;pointer-events:none;z-index:3;padding:0 6%}
+  .cc-overlay span{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(14px,2.3vw,22px);line-height:1.35;padding:4px 10px;text-align:center;white-space:pre-line;max-width:100%}
+  .cc-overlay span:empty{display:none}
+  .cc-btn,.fs-btn{position:absolute;top:8px;z-index:4;background:rgba(0,0,0,.65);color:#fff;border:1px solid rgba(255,255,255,.45);font:inherit;font-size:11px;font-weight:700;letter-spacing:1px;padding:5px 9px;cursor:pointer}
+  .cc-btn{left:8px} .fs-btn{left:58px}
+  .cc-btn[aria-pressed=false]{opacity:.6;text-decoration:line-through}
+  .video-wrap:fullscreen{width:100vw;height:100vh;aspect-ratio:auto;border:0}
+  .video-wrap:fullscreen .cc-overlay span{font-size:clamp(20px,3vw,40px)}
+  html[dir=rtl] .opt{text-align:right} html[dir=rtl] .video-wrap{direction:ltr}
   @media (max-width:600px){ .card{padding:18px} }
 </style>
 </head>
@@ -104,21 +117,24 @@
 <div class="course" id="app">
   <div class="header">
     <h1 id="courseTitle">Training Course</h1>
-    <div class="who" id="who"></div>
+    <div class="header-right">
+      <label class="lang-wrap hidden" id="langWrap"><span aria-hidden="true">&#127760;</span><select id="langPick" class="lang-pick" aria-label="Language"></select></label>
+      <div class="who" id="who"></div>
+    </div>
   </div>
   <div class="progress" id="progress"></div>
 
   <!-- Step 0: identify the learner -->
   <section class="card" id="startCard">
-    <div class="eyebrow">Sign in</div>
-    <h2>Before you begin</h2>
+    <div class="eyebrow" data-ui="signIn">Sign in</div>
+    <h2 data-ui="beforeBegin">Before you begin</h2>
     <p class="note" id="courseIntro"></p>
     <form id="startForm" autocomplete="on">
-      <label for="name">Full name</label>
-      <input type="text" id="name" required placeholder="First and last name">
-      <label for="email">Email address</label>
+      <label for="name" data-ui="fullName">Full name</label>
+      <input type="text" id="name" required placeholder="First and last name" data-ui-ph="namePh">
+      <label for="email" data-ui="email">Email address</label>
       <input type="email" id="email" required placeholder="you@example.com">
-      <button class="btn" type="submit">Start course</button>
+      <button class="btn" type="submit" data-ui="start">Start course</button>
     </form>
   </section>
 
@@ -227,7 +243,66 @@ let CONFIG = {
 /* ===================================================================== */
 
 const $ = (id) => document.getElementById(id);
-const state = { name:"", email:"", idx:0, attempts:0, watched:false, startedAt:null, log:[] };
+const state = { name:"", email:"", idx:0, attempts:0, watched:false, startedAt:null, log:[], noteKey:null, cues:[], ccOn:true, playerKind:null };
+
+/* ---------------- languages & translation ----------------
+   English is the source. Translations are produced in admin.html and published inside the config as
+   CONFIG.translations[lang][key] = { t, src, edited }, where src is a hash of the English text it was
+   made from. If the English has changed since (hash mismatch) the English is shown instead of a stale translation.
+   Keep UI in sync with the copy in admin.html. */
+const UI = {
+  signIn:"Sign in", beforeBegin:"Before you begin", fullName:"Full name", namePh:"First and last name",
+  email:"Email address", start:"Start course", loading:"Loading course…", sectionOf:"Section {n} of {total}",
+  watchToUnlock:"Watch the full video to unlock the questions below.", watchToContinue:"Watch the full video to continue.",
+  answerBelow:"Answer the questions below to continue.", videoDoneAnswer:"Video complete — answer the questions below.",
+  videoDoneContinue:"Video complete — click Continue.", submitContinue:"Submit & continue", submitFinish:"Submit & finish",
+  cont:"Continue", finish:"Finish", recording:"Recording your answers…", recordingShort:"Recording…",
+  correct:"Correct — {score}.", tryAgain:"{score} correct. Review the video and try again.",
+  showNotes:"Show notes", hideNotes:"Hide notes", comingSoon:"Video coming soon", unavailable:"Video unavailable",
+  unavailableBody:"This video could not be loaded.", preview:"PREVIEW — submissions not logged", captions:"Captions", fullscreen:"Full screen"
+};
+const LANG_NAMES = { en:"English", es:"Español", ht:"Kreyòl ayisyen", pt:"Português", fr:"Français", vi:"Tiếng Việt", "zh-CN":"中文（简体）",
+  "zh-TW":"中文（繁體）", tl:"Tagalog", ar:"العربية", ru:"Русский", ko:"한국어", de:"Deutsch", it:"Italiano", ja:"日本語", pl:"Polski", uk:"Українська", hi:"हिन्दी" };
+const RTL = new Set(["ar","he","iw","fa","ur"]);
+let LANG = "en";
+function h32(str){ let h = 5381; str = String(str ?? ""); for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0; return (h >>> 0).toString(36); }
+function tr(key, src){
+  src = src ?? "";
+  if (LANG === "en" || !String(src).trim()) return src;
+  const e = CONFIG.translations && CONFIG.translations[LANG] && CONFIG.translations[LANG][key];
+  return (e && e.t && e.src === h32(src)) ? e.t : src;
+}
+function ui(k, vars){ let out = tr("ui:" + k, UI[k] || k); for (const [a, b] of Object.entries(vars || {})) out = out.split("{" + a + "}").join(b); return out; }
+const segT = (seg, f) => tr(`s:${seg.id}:${f}`, seg[f] || "");
+const capOf = im => tr(`i:${im.id}:caption`, im.caption || "");
+
+function initLanguages(){
+  const langs = (CONFIG.languages || []).filter(l => l && l !== "en");
+  const options = ["en", ...langs];
+  if (!langs.length) { LANG = "en"; $("langWrap").classList.add("hidden"); applyLangAttrs(); return; }
+  $("langPick").innerHTML = options.map(l => `<option value="${l}">${esc(LANG_NAMES[l] || l)}</option>`).join("");
+  let saved = null; try { saved = localStorage.getItem("courseLang"); } catch(_){}
+  const nav = (navigator.languages || [navigator.language || "en"]).map(x => String(x).toLowerCase());
+  LANG = (saved && options.includes(saved)) ? saved
+       : (options.find(o => nav.some(n => n === o.toLowerCase())) || options.find(o => nav.some(n => n.split("-")[0] === o.split("-")[0].toLowerCase())) || "en");
+  $("langPick").value = LANG; $("langWrap").classList.remove("hidden");
+  applyLangAttrs();
+}
+function applyLangAttrs(){ document.documentElement.lang = LANG; document.documentElement.dir = RTL.has(LANG.split("-")[0]) ? "rtl" : "ltr"; }
+function applyStatic(){
+  const title = tr("c:courseTitle", CONFIG.courseTitle);
+  $("courseTitle").textContent = title; document.title = title;
+  $("courseIntro").textContent = tr("c:intro", CONFIG.intro);
+  document.querySelectorAll("[data-ui]").forEach(el => el.textContent = ui(el.dataset.ui));
+  document.querySelectorAll("[data-ui-ph]").forEach(el => el.placeholder = ui(el.dataset.uiPh));
+  if (state.preview && !state.name) $("who").textContent = ui("preview");
+  if (!$("doneCard").classList.contains("hidden")) { $("doneTitle").textContent = tr("c:doneTitle", CONFIG.doneTitle); $("doneNote").textContent = tr("c:doneNote", CONFIG.doneNote); }
+}
+$("langPick").addEventListener("change", e => {
+  LANG = e.target.value; try { localStorage.setItem("courseLang", LANG); } catch(_){}
+  applyLangAttrs(); applyStatic();
+  if (!$("segmentCard").classList.contains("hidden")) localizeSegment(true);
+});
 
 function renderProgress(){
   const p = $("progress"); p.innerHTML = "";
@@ -244,56 +319,64 @@ function showSegment(i){
   state.idx = i; state.attempts = 0; state.watched = !CONFIG.requireFullWatch; state.startedAt = new Date();
   $("startCard").classList.add("hidden"); $("doneCard").classList.add("hidden");
   $("segmentCard").classList.remove("hidden");
-  $("segTitle").textContent = seg.title;
-  $("segCount").textContent = `Section ${i+1} of ${CONFIG.segments.length}`;
-  const st = seg.type === "text" ? "text" : seg.type === "photo" ? "photo" : "video";
+  const st = segKind(seg);
   $("videoWrap").classList.toggle("hidden", st !== "video"); $("textBody").classList.toggle("hidden", st !== "text"); $("gallery").classList.toggle("hidden", st !== "photo");
   const noQuiz = isNoQuiz(seg);
-  const answerNote = noQuiz ? "" : "Answer the questions below to continue.";
-  if (st === "text") {
-    destroyPlayers(); state.watched = true;
-    $("textBody").innerHTML = sanitize(seg.body || "");
-    $("videoNote").textContent = answerNote;
-    $("notes").classList.add("hidden");
-  } else if (st === "photo") {
-    destroyPlayers(); state.watched = true;
-    renderGallery(seg);
-    $("videoNote").textContent = answerNote;
-    renderNotes(seg);
-  } else if (!(seg.video || "").trim()) {
-    // Video module with no video yet: show the placeholder image instead.
-    destroyPlayers(); state.watched = true;
-    renderPlaceholder(seg);
-    $("videoNote").textContent = answerNote;
-    renderNotes(seg);
-  } else {
+  const answerNote = noQuiz ? null : "answerBelow";
+  if (st === "text") { destroyPlayers(); state.watched = true; setNote(answerNote); $("notes").classList.add("hidden"); }
+  else if (st === "photo") { destroyPlayers(); state.watched = true; renderGallery(seg); setNote(answerNote); }
+  else if (!(seg.video || "").trim()) { destroyPlayers(); state.watched = true; setNote(answerNote); }   // placeholder is drawn in localizeSegment
+  else {
     const kind = renderVideo(seg);
     // BoxCast and Google Drive players give no "ended" signal, so the quiz can't be gated on them.
     if (kind === "boxcast" || kind === "gdrive") state.watched = true;
-    $("videoNote").textContent = (CONFIG.requireFullWatch && !state.watched)
-      ? (noQuiz ? "Watch the full video to continue." : "Watch the full video to unlock the questions below.")
-      : answerNote;
-    renderNotes(seg);
+    setNote((CONFIG.requireFullWatch && !state.watched) ? (noQuiz ? "watchToContinue" : "watchToUnlock") : answerNote);
   }
   $("status").textContent = "";
-  const quiz = $("quiz"); quiz.classList.toggle("locked", !state.watched);
-  const f = $("quizForm"); f.innerHTML = "";
+  $("quiz").classList.toggle("locked", !state.watched);
+  localizeSegment(false);
+  renderProgress();
+  window.scrollTo({top:0, behavior:"smooth"});
+}
+const segKind = seg => seg.type === "text" ? "text" : seg.type === "photo" ? "photo" : "video";
+function setNote(key){ state.noteKey = key; $("videoNote").textContent = key ? ui(key) : ""; }
+
+// Fill every translatable part of the current section. keepAnswers = the learner switched language mid-section.
+function localizeSegment(keepAnswers){
+  const i = state.idx, seg = CONFIG.segments[i]; if (!seg) return;
+  const st = segKind(seg);
+  $("segTitle").textContent = segT(seg, "title");
+  $("segCount").textContent = ui("sectionOf", { n: i + 1, total: CONFIG.segments.length });
+  $("videoNote").textContent = state.noteKey ? ui(state.noteKey) : "";
+  if (st === "text") $("textBody").innerHTML = sanitize(segT(seg, "body"));
+  else renderNotes(seg);
+  if (st === "photo") showGal(gal.idx);
+  if (st === "video" && !(seg.video || "").trim()) renderPlaceholder(seg);
+  if (st === "video") applyCaptions(seg);
+  renderQuiz(seg, keepAnswers);
+}
+function renderQuiz(seg, keepAnswers){
+  const f = $("quizForm");
+  const prev = keepAnswers ? Object.fromEntries([...new FormData(f)]) : {};
+  const marks = keepAnswers ? [...f.querySelectorAll("label.opt")].map(l => l.className) : null;
+  f.innerHTML = "";
+  const noQuiz = isNoQuiz(seg);
   (noQuiz ? [] : seg.questions).forEach((qu, qi) => {
     const fs = document.createElement("fieldset");
-    const lg = document.createElement("legend"); lg.textContent = `${qi+1}. ${qu.q}`; fs.appendChild(lg);
+    const lg = document.createElement("legend"); lg.textContent = `${qi+1}. ${tr(`q:${qu.id}:q`, qu.q)}`; fs.appendChild(lg);
     qu.options.forEach((opt, oi) => {
       const lab = document.createElement("label"); lab.className = "opt"; lab.style.textTransform="none"; lab.style.letterSpacing="0"; lab.style.color="inherit"; lab.style.fontSize="inherit"; lab.style.margin="0 0 6px";
       const inp = document.createElement("input"); inp.type="radio"; inp.name=`q${qi}`; inp.value=oi; inp.required=true;
-      lab.appendChild(inp); lab.appendChild(document.createTextNode(opt)); fs.appendChild(lab);
+      if (prev[`q${qi}`] === String(oi)) inp.checked = true;
+      lab.appendChild(inp); lab.appendChild(document.createTextNode(tr(`q:${qu.id}:o${oi}`, opt))); fs.appendChild(lab);
     });
     f.appendChild(fs);
   });
+  if (marks) [...f.querySelectorAll("label.opt")].forEach((l, k) => { if (marks[k]) l.className = marks[k]; });
   const btn = document.createElement("button"); btn.className="btn"; btn.type="submit";
-  const last = i === CONFIG.segments.length-1;
-  btn.textContent = noQuiz ? (last ? "Finish" : "Continue") : (last ? "Submit & finish" : "Submit & continue");
+  const last = state.idx === CONFIG.segments.length - 1;
+  btn.textContent = ui(noQuiz ? (last ? "finish" : "cont") : (last ? "submitFinish" : "submitContinue"));
   f.appendChild(btn);
-  renderProgress();
-  window.scrollTo({top:0, behavior:"smooth"});
 }
 const isNoQuiz = seg => !!seg.noQuiz || !(seg.questions && seg.questions.length);
 
@@ -301,7 +384,7 @@ const isNoQuiz = seg => !!seg.noQuiz || !(seg.questions && seg.questions.length)
 function videoEnded(){
   if (state.watched) return;
   state.watched = true; $("quiz").classList.remove("locked");
-  $("videoNote").textContent = isNoQuiz(CONFIG.segments[state.idx]) ? "Video complete — click Continue." : "Video complete — answer the questions below.";
+  setNote(isNoQuiz(CONFIG.segments[state.idx]) ? "videoDoneContinue" : "videoDoneAnswer");
 }
 const gating = () => CONFIG.requireFullWatch && !state.watched;
 // "Locked" = no skipping past the furthest point already watched, and no speed changes. Rewinding is fine.
@@ -349,8 +432,10 @@ function youtubeId(input){
   return m ? m[1] : null;
 }
 
-let ytPlayer = null, ytPoll = null, ytLast = 0, vmPlayer = null;
+let ytPlayer = null, ytPoll = null, ytLast = 0, vmPlayer = null, ccTimer = null;
 function destroyPlayers(){
+  if (ccTimer) { clearInterval(ccTimer); ccTimer = null; }
+  state.cues = []; state.playerKind = null;
   if (vmPlayer) { try { vmPlayer.unload && vmPlayer.destroy && vmPlayer.destroy(); } catch(_){} vmPlayer = null; }
   if (ytPoll) { clearInterval(ytPoll); ytPoll = null; }
   if (ytPlayer && ytPlayer.destroy) { try { ytPlayer.destroy(); } catch(_){} }
@@ -360,15 +445,18 @@ function destroyPlayers(){
 
 function renderVideo(seg){
   destroyPlayers();
+  const ownCaps = !!(seg.captions || "").trim();
   const wrap = $("videoWrap"), type = detectType(seg);
 
   if (type === "youtube") {
     const id = youtubeId(seg.video);
-    const host = document.createElement("div"); host.id = "ytHost"; wrap.appendChild(host);
+    const host = document.createElement("div"); host.id = "ytHost"; wrap.appendChild(host); state.playerKind = "overlay";
     loadYouTubeApi().then(() => {
       ytPlayer = new YT.Player("ytHost", {
-        videoId: id, playerVars: { rel:0, modestbranding:1, playsinline:1, enablejsapi:1, origin: location.origin },
+        videoId: id, playerVars: { rel:0, modestbranding:1, playsinline:1, enablejsapi:1, origin: location.origin, hl: LANG,
+          ...(ownCaps ? { fs:0, cc_load_policy:0, iv_load_policy:3 } : { cc_lang_pref: LANG, ...(CONFIG.captionsOn !== false ? { cc_load_policy:1 } : {}) }) },
         events: {
+          onReady: () => { if (ownCaps) ccTimer = setInterval(() => { if (ytPlayer && ytPlayer.getCurrentTime) ccUpdate(ytPlayer.getCurrentTime()); }, 250); },
           onPlaybackRateChange: e => { if (CONFIG.lockPlayback !== false && e.data !== 1) ytPlayer.setPlaybackRate(1); },
           onStateChange: e => {
             if (e.data === YT.PlayerState.ENDED) videoEnded();
@@ -399,17 +487,19 @@ function renderVideo(seg){
     const lock = CONFIG.lockPlayback !== false;
     const q = new URLSearchParams({ dnt:1, title:0, byline:0, portrait:0, pip:0, playsinline:1, color:"00492B", ...(lock ? { speed:0 } : {}), ...(ref.h ? { h: ref.h } : {}) });
     const f = document.createElement("iframe"); f.id = "vimeoFrame"; f.src = `https://player.vimeo.com/video/${ref.id}?${q}`;
-    f.allow = "autoplay; fullscreen; picture-in-picture"; f.allowFullscreen = true; wrap.appendChild(f);
+    if (ownCaps) f.allow = "autoplay"; else { f.allow = "autoplay; fullscreen; picture-in-picture"; f.allowFullscreen = true; }
+    wrap.appendChild(f); state.playerKind = "overlay";
     loadVimeoApi().then(() => {
       if (!window.Vimeo || !Vimeo.Player) return;
       let furthest = 0, snapping = false;
       vmPlayer = new Vimeo.Player(f);
       vmPlayer.on("ended", videoEnded);
-      vmPlayer.on("timeupdate", d => { if (!snapping) furthest = Math.max(furthest, d.seconds); });
+      vmPlayer.on("timeupdate", d => { if (!snapping) furthest = Math.max(furthest, d.seconds); ccUpdate(d.seconds); });
       vmPlayer.on("seeked", d => {
         if ((gating() || locking()) && d.seconds > furthest + 2) { snapping = true; vmPlayer.setCurrentTime(furthest).finally(() => { snapping = false; }); }
       });
       if (lock) vmPlayer.on("playbackratechange", d => { if (d.playbackRate !== 1) vmPlayer.setPlaybackRate(1).catch(()=>{}); });
+      vimeoNativeCaptions();
     }).catch(() => {});
     return type;
   }
@@ -437,6 +527,7 @@ function renderVideo(seg){
 
 function renderFilePlayer(wrap, src, type){
   const v = document.createElement("video"); v.controls = true; v.playsInline = true; v.preload = "metadata"; v.src = src;
+  state.playerKind = "native";
   const lock = CONFIG.lockPlayback !== false;
   if (lock) { v.setAttribute("controlsList", "noplaybackrate nodownload"); v.disablePictureInPicture = true; }
   let furthest = 0;
@@ -446,7 +537,7 @@ function renderFilePlayer(wrap, src, type){
   if (lock) v.addEventListener("ratechange", () => { if (v.playbackRate !== 1) v.playbackRate = 1; });
   v.addEventListener("error", () => {
     const d = document.createElement("div"); d.className = "placeholder-default";
-    d.innerHTML = `<small>Video unavailable</small><div style="font-size:15px;font-family:var(--font-body);font-weight:400;color:#fff">This video could not be loaded. ${type === "gdrivefile" ? "Check that the Drive file is shared with “Anyone with the link”, is an MP4, and is under 100 MB." : type === "dropbox" ? "Check that the Dropbox link is shared with “Anyone with the link” and the file is an MP4." : ""}</div>`;
+    d.innerHTML = `<small>${esc(ui("unavailable"))}</small><div style="font-size:15px;font-family:var(--font-body);font-weight:400;color:#fff">${esc(ui("unavailableBody"))} ${type === "gdrivefile" ? "Check that the Drive file is shared with “Anyone with the link”, is an MP4, and is under 100 MB." : type === "dropbox" ? "Check that the Dropbox link is shared with “Anyone with the link” and the file is an MP4." : ""}</div>`;
     wrap.innerHTML = ""; wrap.appendChild(d);
   });
   wrap.appendChild(v);
@@ -487,17 +578,94 @@ function loadYouTubeApi(){
   return ytApiPromise;
 }
 
+/* ---------------- captions ----------------
+   seg.captions holds English WebVTT. Translations live at CONFIG.translations[lang]["cap:" + seg.id].
+   Our own <video> players get a native <track> (works in full screen, including iPhone).
+   YouTube/Vimeo get an overlay drawn from the player's current time, plus our own full-screen button
+   so the overlay stays visible in full screen. */
+function captionsFor(seg){
+  const raw = seg.captions || ""; if (!raw.trim()) return null;
+  if (LANG !== "en") {
+    const e = CONFIG.translations && CONFIG.translations[LANG] && CONFIG.translations[LANG]["cap:" + seg.id];
+    if (e && e.t && e.src === h32(raw)) return { vtt: e.t, lang: LANG };   // hash the exact text admin.html hashed
+  }
+  return { vtt: raw, lang: "en" };
+}
+function vttTime(t){ const p = t.trim().replace(",", ".").split(":").map(Number); return p.length === 3 ? p[0]*3600 + p[1]*60 + p[2] : p[0]*60 + p[1]; }
+function parseVTT(vtt){
+  const cues = [];
+  String(vtt).replace(/\r/g, "").split(/\n{2,}/).forEach(block => {
+    const lines = block.split("\n"); const k = lines.findIndex(l => l.includes("-->")); if (k < 0) return;
+    const [a, b] = lines[k].split("-->"); const text = lines.slice(k + 1).join("\n").replace(/<[^>]+>/g, "").trim();
+    if (text) cues.push({ start: vttTime(a), end: vttTime(b.trim().split(/\s+/)[0]), text });
+  });
+  return cues;
+}
+let trackUrl = null;
+function applyCaptions(seg){
+  const wrap = $("videoWrap"), cap = captionsFor(seg);
+  wrap.querySelectorAll(".cc-overlay,.cc-btn,.fs-btn").forEach(el => el.remove());
+  if (state.playerKind === "native") {
+    const v = wrap.querySelector("video"); if (!v) return;
+    v.querySelectorAll("track").forEach(t => t.remove());
+    if (trackUrl) { URL.revokeObjectURL(trackUrl); trackUrl = null; }
+    if (!cap) return;
+    const vtt = /^WEBVTT/.test(cap.vtt.trim()) ? cap.vtt : "WEBVTT\n\n" + cap.vtt;
+    trackUrl = URL.createObjectURL(new Blob([vtt], { type: "text/vtt" }));
+    const t = document.createElement("track"); t.kind = "subtitles"; t.srclang = cap.lang; t.label = LANG_NAMES[cap.lang] || cap.lang; t.src = trackUrl;
+    if (state.ccOn) t.default = true;
+    v.appendChild(t);
+    const setMode = () => { const tt = v.textTracks[v.textTracks.length - 1]; if (tt) tt.mode = state.ccOn ? "showing" : "hidden"; };
+    setMode(); t.addEventListener("load", setMode);
+    return;
+  }
+  if (state.playerKind !== "overlay") return;
+  state.cues = cap ? parseVTT(cap.vtt) : [];
+  if (!state.cues.length) { vimeoNativeCaptions(); return; }
+  const ov = document.createElement("div"); ov.className = "cc-overlay"; ov.innerHTML = "<span></span>"; wrap.appendChild(ov);
+  const cc = document.createElement("button"); cc.type = "button"; cc.className = "cc-btn"; cc.textContent = "CC"; cc.title = ui("captions");
+  cc.setAttribute("aria-pressed", String(state.ccOn));
+  cc.addEventListener("click", () => { state.ccOn = !state.ccOn; cc.setAttribute("aria-pressed", String(state.ccOn)); ccUpdate(state.lastT || 0); });
+  wrap.appendChild(cc);
+  if (document.fullscreenEnabled) {
+    const fs = document.createElement("button"); fs.type = "button"; fs.className = "fs-btn"; fs.innerHTML = "&#x26F6;"; fs.title = ui("fullscreen");
+    fs.addEventListener("click", () => document.fullscreenElement ? document.exitFullscreen() : wrap.requestFullscreen());
+    wrap.appendChild(fs);
+  }
+  vimeoNativeCaptions();
+  ccUpdate(state.lastT || 0);
+}
+function ccUpdate(t){
+  state.lastT = t;
+  const span = $("videoWrap").querySelector(".cc-overlay span"); if (!span) return;
+  const cue = state.ccOn ? state.cues.find(c => t >= c.start && t <= c.end) : null;
+  const text = cue ? cue.text : "";
+  if (span.textContent !== text) span.textContent = text;
+}
+// Vimeo videos with no captions loaded here can still use caption tracks uploaded to Vimeo itself.
+function vimeoNativeCaptions(){
+  if (!vmPlayer || !vmPlayer.getTextTracks) return;
+  try {
+  if (state.cues.length) { vmPlayer.disableTextTrack().catch(()=>{}); return; }
+  vmPlayer.getTextTracks().then(tracks => {
+    const base = LANG.split("-")[0];
+    const pick = tracks.find(t => t.language === LANG) || tracks.find(t => t.language.split("-")[0] === base) || tracks.find(t => t.language.split("-")[0] === "en");
+    if (pick && state.ccOn) vmPlayer.enableTextTrack(pick.language, pick.kind).catch(()=>{}); else vmPlayer.disableTextTrack().catch(()=>{});
+  }).catch(()=>{});
+  } catch (_) {}
+}
+
 /* ---------------- placeholder, gallery, lightbox ---------------- */
 function renderPlaceholder(seg){
   const wrap = $("videoWrap"); wrap.innerHTML = "";
   const url = (seg.placeholderImage || "").trim();
   if (url) {
-    const img = document.createElement("img"); img.className = "placeholder"; img.src = url; img.alt = seg.title || "";
-    img.addEventListener("click", () => openLightbox([{ url, caption: seg.title || "" }], 0));
+    const img = document.createElement("img"); img.className = "placeholder"; img.src = url; img.alt = segT(seg, "title");
+    img.addEventListener("click", () => openLightbox([{ url, caption: segT(seg, "title") }], 0));
     wrap.appendChild(img);
   } else {
     const d = document.createElement("div"); d.className = "placeholder-default";
-    d.innerHTML = `<small>Video coming soon</small><div>${esc(seg.title || "")}</div>`;
+    d.innerHTML = `<small>${esc(ui("comingSoon"))}</small><div>${esc(segT(seg, "title"))}</div>`;
     wrap.appendChild(d);
   }
 }
@@ -514,8 +682,9 @@ function showGal(i){
   if (!gal.images.length) { $("galImg").removeAttribute("src"); $("galCaption").textContent = ""; return; }
   gal.idx = (i + gal.images.length) % gal.images.length;
   const im = gal.images[gal.idx];
-  $("galImg").src = im.url; $("galImg").alt = im.caption || "";
-  $("galCaption").textContent = (gal.images.length > 1 ? `${gal.idx+1} / ${gal.images.length}` + (im.caption ? " — " : "") : "") + (im.caption || "");
+  const cap = capOf(im);
+  $("galImg").src = im.url; $("galImg").alt = cap;
+  $("galCaption").textContent = (gal.images.length > 1 ? `${gal.idx+1} / ${gal.images.length}` + (cap ? " — " : "") : "") + cap;
   [...$("galThumbs").children].forEach((t, k) => t.classList.toggle("active", k === gal.idx));
 }
 $("galPrev").addEventListener("click", () => showGal(gal.idx - 1));
@@ -532,7 +701,8 @@ function openLightbox(images, idx){
 function showLb(i){
   lb.idx = (i + lb.images.length) % lb.images.length;
   const im = lb.images[lb.idx];
-  $("lbImg").src = im.url; $("lbImg").alt = im.caption || ""; $("lbCaption").textContent = im.caption || "";
+  const cap = im.id ? capOf(im) : (im.caption || "");
+  $("lbImg").src = im.url; $("lbImg").alt = cap; $("lbCaption").textContent = cap;
   $("lbCount").textContent = `${lb.idx+1} / ${lb.images.length}`;
 }
 function closeLightbox(){ $("lightbox").classList.add("hidden"); document.body.style.overflow = ""; }
@@ -556,7 +726,7 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 /* ---------------- notes under the video ---------------- */
 function renderNotes(seg){
   const box = $("notes"), body = $("notesBody"), tog = $("notesToggle");
-  const raw = (seg.notes || "").trim();
+  const raw = (segT(seg, "notes") || "").trim();
   const html = /</.test(raw) ? sanitize(raw) : linkify(raw).replace(/\n/g, "<br>");
   const hasText = (() => { const d = document.createElement("div"); d.innerHTML = html; return d.textContent.trim().length > 0; })();
   box.classList.toggle("hidden", !hasText);
@@ -565,13 +735,13 @@ function renderNotes(seg){
   const collapsed = !!seg.notesCollapsed;
   tog.classList.toggle("hidden", !collapsed);
   box.classList.toggle("collapsed", collapsed);
-  tog.setAttribute("aria-expanded", "false"); tog.textContent = seg.notesLabel || "Show notes";
+  tog.setAttribute("aria-expanded", "false"); tog.textContent = segT(seg, "notesLabel") || ui("showNotes");
 }
 $("notesToggle").addEventListener("click", () => {
   const box = $("notes"), tog = $("notesToggle"), open = box.classList.toggle("collapsed") === false;
   tog.setAttribute("aria-expanded", String(open));
   const seg = CONFIG.segments[state.idx] || {};
-  tog.textContent = open ? (seg.notesHideLabel || "Hide notes") : (seg.notesLabel || "Show notes");
+  tog.textContent = open ? ui("hideNotes") : (segT(seg, "notesLabel") || ui("showNotes"));
 });
 // Allow-list sanitizer for admin-authored HTML (headings, lists, links, emphasis only).
 function sanitize(html){
@@ -632,29 +802,30 @@ $("quizForm").addEventListener("submit", async e => {
     attempt: state.attempts, score: noQuiz ? "viewed" : `${correct}/${total}`, passed,
     answers: noQuiz ? "(no quiz)" : answers.map((a, qi) => questions[qi].options[a] ?? "").join(" | "),
     secondsOnSegment: Math.round((Date.now() - state.startedAt.getTime())/1000),
-    completedCourse: passed && state.idx === CONFIG.segments.length - 1
+    completedCourse: passed && state.idx === CONFIG.segments.length - 1,
+    language: LANG
   };
   state.log.push(entry);
   const btn = e.target.querySelector("button"); btn.disabled = true;
-  $("status").textContent = noQuiz ? "Recording…" : "Recording your answers…";
+  $("status").textContent = ui(noQuiz ? "recordingShort" : "recording");
   await logSubmission(entry);
   btn.disabled = false;
 
   if (passed) {
-    $("status").innerHTML = noQuiz ? "" : `<span class="feedback ok">Correct — ${correct}/${total}.</span>`;
+    $("status").innerHTML = noQuiz ? "" : `<span class="feedback ok">${esc(ui("correct", { score: `${correct}/${total}` }))}</span>`;
     setTimeout(() => {
       if (state.idx + 1 < CONFIG.segments.length) showSegment(state.idx + 1);
       else finish();
     }, noQuiz ? 150 : 900);
   } else {
-    $("status").innerHTML = `<span class="feedback bad">${correct}/${total} correct. Review the video and try again.</span>`;
+    $("status").innerHTML = `<span class="feedback bad">${esc(ui("tryAgain", { score: `${correct}/${total}` }))}</span>`;
   }
 });
 
 function finish(){
   state.idx = CONFIG.segments.length; renderProgress();
   $("segmentCard").classList.add("hidden"); $("doneCard").classList.remove("hidden");
-  $("doneTitle").textContent = CONFIG.doneTitle; $("doneNote").textContent = CONFIG.doneNote;
+  $("doneTitle").textContent = tr("c:doneTitle", CONFIG.doneTitle); $("doneNote").textContent = tr("c:doneNote", CONFIG.doneNote);
   // Tell a parent page (e.g. Squarespace) that the course finished, if embedded in an iframe.
   try { window.parent.postMessage({ type:"course-complete", name:state.name, email:state.email }, "*"); } catch(_){}
 }
@@ -675,7 +846,7 @@ async function loadRemoteConfig(){
   if (new URLSearchParams(location.search).get("preview") === "1") {
     try {
       const draft = JSON.parse(sessionStorage.getItem("coursePreviewConfig") || "null");
-      if (draft) { CONFIG = Object.assign({}, CONFIG, draft, { logEndpoint: "" }); $("who").textContent = "PREVIEW — submissions not logged"; return; }
+      if (draft) { CONFIG = Object.assign({}, CONFIG, draft, { logEndpoint: "" }); state.preview = true; return; }
     } catch(_){}
   }
   if (!CONFIG.logEndpoint) return;
@@ -688,10 +859,11 @@ async function loadRemoteConfig(){
   } catch (err) { console.warn("Using built-in course content; backend unreachable:", err); }
 }
 (async () => {
-  $("courseIntro").textContent = "Loading course…";
+  $("courseIntro").textContent = UI.loading;
   await loadRemoteConfig();
-  $("courseTitle").textContent = CONFIG.courseTitle; document.title = CONFIG.courseTitle;
-  $("courseIntro").textContent = CONFIG.intro;
+  state.ccOn = CONFIG.captionsOn !== false;
+  initLanguages();
+  applyStatic();
   renderProgress();
 })();
 </script>

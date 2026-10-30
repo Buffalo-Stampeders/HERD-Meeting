@@ -76,6 +76,18 @@
   .stat .l{font-size:11px;font-weight:700;color:var(--bronze);text-transform:uppercase;letter-spacing:2px;margin-top:4px}
   .hidden{display:none !important}
   .empty{color:var(--muted);text-align:center;padding:30px}
+  .langgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:0 16px;margin-top:6px}
+  .tr-group{margin:20px 0 4px;font-size:16px;border-bottom:2px solid var(--line);padding-bottom:4px}
+  .tr-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.35fr);gap:16px;padding:10px 0;border-bottom:1px dashed var(--line)}
+  .tr-label{font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--bronze);margin-bottom:3px}
+  .tr-en{font-size:14px;white-space:pre-wrap;max-height:9em;overflow:auto}
+  .tr-dst textarea{width:100%}
+  .tr-dst .rich-body{min-height:60px}
+  .tr-meta{display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap}
+  .pill.tr-missing,.pill.tr-stale{background:#fdecea;color:var(--bad)} .pill.tr-machine{background:var(--cream);color:#8a6d3b} .pill.tr-reviewed{background:#e8f5ec;color:var(--ok)}
+  .stat.st-missing .n,.stat.st-stale .n{color:var(--bad)} .stat.st-machine .n{color:#8a6d3b}
+  textarea.mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.4}
+  @media (max-width:760px){ .tr-row{grid-template-columns:1fr} }
   .drive-check{margin-top:6px;padding:8px 12px;font-size:13px;border-left:4px solid var(--bronze);background:var(--cream-light)}
   .drive-check.bad{border-left-color:var(--bad);background:#fdecea;color:var(--bad);font-weight:600}
   .drive-check.ok{border-left-color:var(--ok);background:#e8f5ec}
@@ -138,6 +150,7 @@
   <div class="tabs">
     <button class="tab active" data-tab="content">Course content</button>
     <button class="tab" data-tab="submissions">Submissions</button>
+    <button class="tab" data-tab="translations">Translations</button>
     <button class="tab" data-tab="settings">Connection</button>
   </div>
   <button class="btn logout" id="logoutBtn">Sign out</button>
@@ -194,6 +207,30 @@
     </div>
     <div id="modules"></div>
     <div class="empty" id="noModules">No modules yet. Click "+ Add module".</div>
+  </section>
+
+  <!-- ============ TRANSLATIONS ============ -->
+  <section id="tab-translations" class="hidden">
+    <div class="card">
+      <h2>Languages</h2>
+      <p class="hint" style="font-size:14px;margin:6px 0 4px">Learners choose a language from a menu on the course. English is the original. Everything else is machine-translated with Google Translate, then you review and correct it below. Anything not yet translated shows in English.</p>
+      <div class="langgrid" id="langGrid"></div>
+      <div class="check" style="margin-top:12px"><input type="checkbox" id="captionsOn"><span>Show video captions by default <span class="hint" style="display:block">Learners can still turn them off with the player's CC button.</span></span></div>
+    </div>
+    <div class="card hidden" id="trPanel">
+      <div class="toolbar">
+        <h2>Review translations</h2><span class="spacer"></span>
+        <select id="trLang" style="max-width:220px"></select>
+        <select id="trFilter" style="max-width:200px"><option value="attention">Needs attention</option><option value="all">Show everything</option></select>
+      </div>
+      <div class="stats" id="trStats" style="margin-top:12px"></div>
+      <div class="toolbar">
+        <button class="btn sm" id="trNeeded">Translate new &amp; changed</button>
+        <button class="btn ghost sm" id="trAll">Re-translate all unreviewed</button>
+        <span class="hint">Editing a line marks it Reviewed and protects it from re-translation.</span>
+      </div>
+      <div id="trList" style="margin-top:8px"></div>
+    </div>
   </section>
 
   <!-- ============ SUBMISSIONS ============ -->
@@ -254,7 +291,8 @@ function esc(s){ return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","
 /* ---------------- tabs ---------------- */
 document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => {
   document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x===t));
-  ["content","submissions","settings"].forEach(n => $("tab-"+n).classList.toggle("hidden", n!==t.dataset.tab));
+  ["content","translations","submissions","settings"].forEach(n => $("tab-"+n).classList.toggle("hidden", n!==t.dataset.tab));
+  if (t.dataset.tab === "translations") renderTranslations();
   if (t.dataset.tab === "submissions" && conn.endpoint && !subs.rows.length) loadSubmissions();
 }));
 function showTab(n){ document.querySelector(`.tab[data-tab=${n}]`).click(); }
@@ -338,11 +376,23 @@ async function loadConfig(){
 async function publish(){
   const problems = validate();
   if (problems.length) { alert("Fix these before publishing:\n\n• " + problems.join("\n• ")); return; }
+  config.segments.forEach(sg => { if ((sg.captions||"").trim()) sg.captions = normalizeCaptions(sg.captions); });
+  pruneTranslations();
+  const langs = config.languages || [];
+  if (langs.length) {
+    const items = collectStrings(config);
+    const pending = langs.map(l => [l, items.filter(it => ["missing","stale"].includes(trStatus(l, it))).length]).filter(([, n]) => n);
+    if (pending.length && confirm(`Some text isn't translated yet (new or changed since the last translation):\n${pending.map(([l, n]) => `  • ${LANG_EN[l] || l}: ${n}`).join("\n")}\n\nOK — translate it now, then publish.\nCancel — publish anyway (that text shows in English until translated).`)) {
+      $("saveBtn").disabled = true;
+      try { for (const [l] of pending) await translateLang(l, "needed"); }
+      catch (err) { setMsg("Translation failed (" + err.message + ") — publishing without it.", "bad"); }
+    }
+  }
   $("saveBtn").disabled = true; setMsg("Publishing…");
   try {
     config.segments.forEach(sg => delete sg._driveTooBig);
     const r = await api({}, { action:"saveConfig", key: conn.key, config });
-    if (r.ok) { dirty = false; localStorage.removeItem("courseAdminDraft"); setMsg("Published " + new Date(r.updatedAt).toLocaleString() + ". Learners see the new version on their next page load.", "ok"); }
+    if (r.ok) { if (!$("tab-translations").classList.contains("hidden")) renderTranslations(); dirty = false; localStorage.removeItem("courseAdminDraft"); setMsg("Published " + new Date(r.updatedAt).toLocaleString() + ". Learners see the new version on their next page load.", "ok"); }
     else { setMsg("Publish failed: " + (r.error||"unknown error"), "bad"); $("saveBtn").disabled = false; }
   } catch (err) { setMsg("Publish failed — backend unreachable.", "bad"); $("saveBtn").disabled = false; }
 }
@@ -367,6 +417,7 @@ function validate(){
     else if (vt === "boxcast" && !/boxcast|<iframe|<script/i.test(v)) p.push(`${n}: paste the BoxCast embed code or a boxcast.tv URL.`);
     else if (vt === "file" && !/^https?:\/\//i.test(v)) p.push(`${n}: video file URL must start with http(s)://.`);
     s.videoType = vt;
+    if ((s.captions||"").trim() && !vttCues(normalizeCaptions(s.captions)).length) p.push(`${n}: the captions don't contain any timed lines (expected WebVTT or SRT).`);
     }
     if (s.noQuiz) return;
     if (s.questions.length < 1) p.push(`${n}: needs at least one question (or tick "No questions for this module").`);
@@ -386,6 +437,7 @@ function validate(){
 const openModules = new Set();
 
 function render(){
+  ensureIds(config);
   $("courseTitle").value = config.courseTitle || "";
   $("intro").value = config.intro || "";
   $("doneTitle").value = config.doneTitle || "";
@@ -532,6 +584,7 @@ async function uploadImage(file, onStatus){
   return out.url;
 }
 function renderImageList(host, seg){
+  ensureIds(config);
   host.innerHTML = "";
   const meta = host.closest(".module")?.querySelector(".module-head .meta");
   if (meta) { const n = (seg.images||[]).length; meta.textContent = `${n} photo${n===1?"":"s"} · ` + (seg.noQuiz ? "no quiz" : seg.questions.length + " question" + (seg.questions.length===1?"":"s")); }
@@ -559,7 +612,217 @@ function saveSel(){ const s = getSelection(); return s.rangeCount ? s.getRangeAt
 function restoreSel(r){ if (!r) return; const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
 const plainText = html => { const d = document.createElement("div"); d.innerHTML = html || ""; return d.textContent.trim(); };
 
+/* ---------------- translation ----------------
+   English is the source. Every translatable string has a stable key (see collectStrings). Translations are
+   stored in config.translations[lang][key] = { t, src, edited }: src is a hash of the English it came from,
+   so a change to the English marks the translation "Outdated" and the course falls back to English for it.
+   UI must match the copy in course.html. */
+const UI = {
+  signIn:"Sign in", beforeBegin:"Before you begin", fullName:"Full name", namePh:"First and last name",
+  email:"Email address", start:"Start course", loading:"Loading course…", sectionOf:"Section {n} of {total}",
+  watchToUnlock:"Watch the full video to unlock the questions below.", watchToContinue:"Watch the full video to continue.",
+  answerBelow:"Answer the questions below to continue.", videoDoneAnswer:"Video complete — answer the questions below.",
+  videoDoneContinue:"Video complete — click Continue.", submitContinue:"Submit & continue", submitFinish:"Submit & finish",
+  cont:"Continue", finish:"Finish", recording:"Recording your answers…", recordingShort:"Recording…",
+  correct:"Correct — {score}.", tryAgain:"{score} correct. Review the video and try again.",
+  showNotes:"Show notes", hideNotes:"Hide notes", comingSoon:"Video coming soon", unavailable:"Video unavailable",
+  unavailableBody:"This video could not be loaded.", preview:"PREVIEW — submissions not logged", captions:"Captions", fullscreen:"Full screen"
+};
+const LANG_NAMES = { en:"English", es:"Español", ht:"Kreyòl ayisyen", pt:"Português", fr:"Français", vi:"Tiếng Việt", "zh-CN":"中文（简体）",
+  "zh-TW":"中文（繁體）", tl:"Tagalog", ar:"العربية", ru:"Русский", ko:"한국어", de:"Deutsch", it:"Italiano", ja:"日本語", pl:"Polski", uk:"Українська", hi:"हिन्दी" };
+const LANG_EN = { es:"Spanish", ht:"Haitian Creole", pt:"Portuguese", fr:"French", vi:"Vietnamese", "zh-CN":"Chinese (Simplified)", "zh-TW":"Chinese (Traditional)",
+  tl:"Tagalog", ar:"Arabic", ru:"Russian", ko:"Korean", de:"German", it:"Italian", ja:"Japanese", pl:"Polish", uk:"Ukrainian", hi:"Hindi" };
+const LANG_CHOICES = Object.keys(LANG_EN);
+const TR_LABEL = { missing:"Not translated", stale:"Outdated", machine:"Machine — unreviewed", reviewed:"Reviewed" };
+function h32(str){ let h = 5381; str = String(str ?? ""); for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0; return (h >>> 0).toString(36); }
+const uid = () => Math.random().toString(36).slice(2, 9);
+function ensureIds(cfg){
+  if (!cfg) return;
+  cfg.languages = cfg.languages || []; cfg.translations = cfg.translations || {};
+  (cfg.segments || []).forEach(s => {
+    if (!s.id) s.id = uid();
+    (s.questions || []).forEach(q => { if (!q.id) q.id = uid(); });
+    (s.images || []).forEach(im => { if (!im.id) im.id = uid(); });
+  });
+}
+function stripIds(seg){ delete seg.id; (seg.questions||[]).forEach(q => delete q.id); (seg.images||[]).forEach(im => delete im.id); return seg; }
+
+/* captions helpers */
+function normalizeCaptions(text){
+  let t = String(text || "").replace(/^﻿/, "").replace(/\r\n?/g, "\n").trim();
+  if (!t) return "";
+  t = t.replace(/(\d{1,2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/(^|\n|\s)(\d{2}:\d{2}),(\d{3})(?=\s*-->|\s*$)/gm, "$1$2.$3");
+  if (!/^WEBVTT/.test(t)) t = "WEBVTT\n\n" + t;
+  return t + "\n";
+}
+function vttCues(vtt){
+  const out = [];
+  String(vtt || "").replace(/\r/g, "").split(/\n{2,}/).forEach(block => {
+    const lines = block.split("\n"); const k = lines.findIndex(l => l.includes("-->")); if (k < 0) return;
+    out.push({ timing: lines[k].trim(), text: lines.slice(k + 1).join("\n").trim() });
+  });
+  return out.filter(c => c.text);
+}
+const vttBuild = cues => "WEBVTT\n\n" + cues.map(c => c.timing + "\n" + c.text).join("\n\n") + "\n";
+
+/* every translatable string in the course, in reading order */
+function collectStrings(cfg){
+  ensureIds(cfg);
+  const L = [];
+  const add = (key, label, text, kind = "text", group = "Course") => {
+    const s = String(text || "");
+    if (!s.trim()) return;
+    if (kind === "html" && !plainText(s) && !/<img/i.test(s)) return;
+    L.push({ key, label, text: s, kind, group });
+  };
+  add("c:courseTitle", "Course title", cfg.courseTitle); add("c:intro", "Intro text", cfg.intro);
+  add("c:doneTitle", "Completion heading", cfg.doneTitle); add("c:doneNote", "Completion message", cfg.doneNote);
+  cfg.segments.forEach((s, i) => {
+    const g = `Section ${i + 1}` + (s.title ? ` — ${s.title}` : "");
+    add(`s:${s.id}:title`, "Title", s.title, "text", g);
+    if (s.type === "text") add(`s:${s.id}:body`, "Section text", s.body, "html", g);
+    else { add(`s:${s.id}:notes`, "Notes", s.notes, "html", g); if (s.notesCollapsed) add(`s:${s.id}:notesLabel`, "Notes toggle label", s.notesLabel, "text", g); }
+    if (s.type === "photo") (s.images || []).forEach((im, k) => add(`i:${im.id}:caption`, `Image ${k + 1} caption`, im.caption, "text", g));
+    if (s.type !== "text" && s.type !== "photo" && vttCues(s.captions).length) add(`cap:${s.id}`, "Video captions", s.captions, "vtt", g);
+    if (!s.noQuiz) (s.questions || []).forEach((q, qi) => {
+      add(`q:${q.id}:q`, `Question ${qi + 1}`, q.q, "text", g);
+      (q.options || []).forEach((o, oi) => add(`q:${q.id}:o${oi}`, `Question ${qi + 1} · option ${String.fromCharCode(65 + oi)}`, o, "text", g));
+    });
+  });
+  Object.entries(UI).forEach(([k, v]) => add(`ui:${k}`, `“${v}”`, v, "text", "Course interface — buttons & messages"));
+  return L;
+}
+function trStatus(lang, item){
+  const e = config.translations && config.translations[lang] && config.translations[lang][item.key];
+  if (!e || !e.t) return "missing";
+  if (e.src !== h32(item.text)) return "stale";
+  return e.edited ? "reviewed" : "machine";
+}
+// Send items to the backend (Google Translate). Captions are split into cues and rebuilt with the same timings.
+async function translateItems(lang, items, onProgress){
+  const reqs = [], capMap = {};
+  items.forEach(it => {
+    if (it.kind === "vtt") { const cues = vttCues(it.text); capMap[it.key] = cues; cues.forEach((c, n) => reqs.push({ id: it.key + "#" + n, text: c.text })); }
+    else reqs.push({ id: it.key, text: it.text, html: it.kind === "html" });
+  });
+  const results = {}; let done = 0, errors = 0;
+  for (let i = 0; i < reqs.length; i += 60) {
+    const chunk = reqs.slice(i, i + 60);
+    const r = await api({}, { action:"translate", key: conn.key, source:"en", target: lang, items: chunk });
+    if (!r.ok) throw new Error(r.error || "Translation failed");
+    Object.assign(results, r.results); done += chunk.length; onProgress && onProgress(done, reqs.length);
+  }
+  const tx = config.translations[lang] = config.translations[lang] || {};
+  items.forEach(it => {
+    if (it.kind === "vtt") {
+      const cues = capMap[it.key].map((c, n) => { const res = results[it.key + "#" + n]; if (!res || res.error) errors++; return { timing: c.timing, text: (res && !res.error && res.t) ? res.t : c.text }; });
+      tx[it.key] = { t: vttBuild(cues), src: h32(it.text), edited: false };
+    } else {
+      const res = results[it.key];
+      if (!res || res.error || !res.t) { errors++; return; }
+      tx[it.key] = { t: res.t, src: h32(it.text), edited: false };
+    }
+  });
+  markDirty();
+  return { count: items.length, errors };
+}
+async function translateLang(lang, mode){   // "needed" = new + outdated; "all" = everything except reviewed lines
+  const items = collectStrings(config).filter(it => { const st = trStatus(lang, it); return mode === "all" ? st !== "reviewed" : (st === "missing" || st === "stale"); });
+  if (!items.length) return { count: 0, errors: 0 };
+  return translateItems(lang, items, (d, t) => setMsg(`Translating to ${LANG_EN[lang] || lang}… ${d}/${t}`));
+}
+function pruneTranslations(){
+  const keys = new Set(collectStrings(config).map(it => it.key));
+  Object.values(config.translations || {}).forEach(tx => Object.keys(tx).forEach(k => { if (!keys.has(k)) delete tx[k]; }));
+}
+function capSummary(seg){
+  const n = vttCues(seg.captions).length;
+  if (!n) return (seg.captions || "").trim() ? "⚠ No caption lines found — check the file format." : "No captions.";
+  const item = { key: `cap:${seg.id}`, text: seg.captions };
+  const langs = (config.languages || []).map(l => `${LANG_EN[l] || l}: ${trStatus(l, item) === "missing" ? "not translated" : trStatus(l, item) === "stale" ? "outdated" : "✓"}`);
+  return `${n} English caption lines` + (langs.length ? ` · ${langs.join(" · ")}` : "");
+}
+
+/* ---------------- Translations tab ---------------- */
+let trLang = null, trBusy = false;
+function renderTranslations(){
+  if (!config) return;
+  ensureIds(config);
+  const langs = config.languages || [];
+  $("langGrid").innerHTML = LANG_CHOICES.map(l => `<label class="check"><input type="checkbox" value="${l}" ${langs.includes(l) ? "checked" : ""}><span>${esc(LANG_EN[l])} <span class="hint">· ${esc(LANG_NAMES[l])}</span></span></label>`).join("");
+  $("langGrid").querySelectorAll("input").forEach(cb => cb.addEventListener("change", () => {
+    config.languages = [...$("langGrid").querySelectorAll("input:checked")].map(x => x.value); markDirty(); renderTranslations();
+  }));
+  $("captionsOn").checked = config.captionsOn !== false;
+  $("trPanel").classList.toggle("hidden", !langs.length);
+  if (!langs.length) return;
+  if (!langs.includes(trLang)) trLang = langs[0];
+  $("trLang").innerHTML = langs.map(l => `<option value="${l}" ${l === trLang ? "selected" : ""}>${esc(LANG_EN[l] || l)}</option>`).join("");
+  const items = collectStrings(config);
+  const counts = { missing:0, stale:0, machine:0, reviewed:0 };
+  items.forEach(it => counts[trStatus(trLang, it)]++);
+  $("trStats").innerHTML = Object.keys(counts).map(k => `<div class="stat st-${k}"><div class="n">${counts[k]}</div><div class="l">${TR_LABEL[k]}</div></div>`).join("");
+  const filter = $("trFilter").value, list = $("trList"); list.innerHTML = "";
+  let lastGroup = null, shown = 0;
+  items.forEach(it => {
+    const st = trStatus(trLang, it);
+    if (filter === "attention" && st === "reviewed") return;
+    if (it.group !== lastGroup) { const h = document.createElement("h3"); h.className = "tr-group"; h.textContent = it.group; list.appendChild(h); lastGroup = it.group; }
+    list.appendChild(renderTrRow(trLang, it, st)); shown++;
+  });
+  if (!shown) list.innerHTML = `<div class="empty">Everything in ${esc(LANG_EN[trLang])} is translated and reviewed.</div>`;
+}
+function renderTrRow(lang, it, st){
+  const tx = config.translations[lang] = config.translations[lang] || {};
+  const e = tx[it.key];
+  const row = document.createElement("div"); row.className = "tr-row"; row.dataset.key = it.key;
+  const src = it.kind === "html" ? esc(plainText(it.text)) : it.kind === "vtt" ? `<em>${vttCues(it.text).length} caption lines</em>` : esc(it.text);
+  row.innerHTML = `<div class="tr-src"><div class="tr-label">${esc(it.label)}</div><div class="tr-en">${src}</div></div>
+    <div class="tr-dst"><div class="tr-edit"></div>
+      <div class="tr-meta"><span class="pill tr-${st}">${TR_LABEL[st]}</span>
+        <button class="btn ghost sm" data-r="review" ${st === "machine" ? "" : "hidden"}>Mark reviewed</button>
+        <button class="btn ghost sm" data-r="redo">${st === "missing" ? "Translate" : "Re-translate"}</button>
+        ${it.kind === "vtt" && e && e.t ? `<button class="btn ghost sm" data-r="dl">Download .vtt</button>` : ""}
+      </div></div>`;
+  const ed = row.querySelector(".tr-edit");
+  const save = val => {
+    tx[it.key] = { t: val, src: h32(it.text), edited: true }; markDirty();
+    const pill = row.querySelector(".pill"); pill.className = "pill tr-reviewed"; pill.textContent = TR_LABEL.reviewed; row.querySelector("[data-r=review]").hidden = true;
+  };
+  if (it.kind === "html") richEditor(ed, (e && e.t) || "", save);
+  else {
+    const ta = document.createElement("textarea");
+    if (it.kind === "vtt") { ta.rows = 6; ta.className = "mono"; ta.placeholder = "Click Translate to create these captions."; }
+    else ta.rows = Math.min(4, Math.max(1, Math.ceil(it.text.length / 70)));
+    ta.value = (e && e.t) || ""; ta.addEventListener("input", () => save(ta.value)); ed.appendChild(ta);
+  }
+  row.querySelector("[data-r=review]").addEventListener("click", () => { if (tx[it.key]) { tx[it.key].edited = true; markDirty(); renderTranslations(); } });
+  row.querySelector("[data-r=redo]").addEventListener("click", async ev => {
+    ev.target.disabled = true;
+    try { const r = await translateItems(lang, [it]); setMsg(r.errors ? "Some text couldn't be translated — try again." : "Translated.", r.errors ? "bad" : "ok"); }
+    catch (err) { setMsg("Translation failed: " + err.message, "bad"); }
+    renderTranslations();
+  });
+  const dl = row.querySelector("[data-r=dl]"); if (dl) dl.addEventListener("click", () => download(`captions-${it.key.slice(4)}-${lang}.vtt`, tx[it.key].t, "text/vtt"));
+  return row;
+}
+async function runTranslate(mode){
+  if (trBusy) return; trBusy = true; ["trNeeded","trAll"].forEach(id => $(id).disabled = true);
+  try {
+    const r = await translateLang(trLang, mode);
+    setMsg(r.count ? `Translated ${r.count} item${r.count === 1 ? "" : "s"} to ${LANG_EN[trLang]}${r.errors ? ` (${r.errors} couldn't be translated — try again)` : ""}. Review, then Publish.` : `Nothing to translate in ${LANG_EN[trLang]}.`, r.errors ? "bad" : "ok");
+  } catch (err) { setMsg("Translation failed: " + err.message, "bad"); }
+  trBusy = false; ["trNeeded","trAll"].forEach(id => $(id).disabled = false);
+  renderTranslations();
+}
+$("trLang").addEventListener("change", e => { trLang = e.target.value; renderTranslations(); });
+$("trFilter").addEventListener("change", renderTranslations);
+$("trNeeded").addEventListener("click", () => runTranslate("needed"));
+$("trAll").addEventListener("click", () => { if (confirm("Re-translate every line that isn't marked Reviewed? Lines you've edited or reviewed are kept.")) runTranslate("all"); });
+$("captionsOn").addEventListener("change", e => { config.captionsOn = e.target.checked; markDirty(); });
+
 function renderModules(){
+  ensureIds(config);
   const host = $("modules"); host.innerHTML = "";
   $("noModules").classList.toggle("hidden", config.segments.length > 0);
   const CONFIG_FULLWATCH_NOTE = config.requireFullWatch ? " (after the video ends, where the player supports it)" : "";
@@ -618,6 +881,20 @@ function renderModules(){
         <div class="hint video-hint">${VIDEO_TYPES[vt].hint}</div>
         <div class="drive-check hidden" data-drivecheck></div>
         <div class="preview hidden"></div>
+        <label>Captions <span style="font-weight:400;letter-spacing:0;text-transform:none;color:var(--muted)">(English .vtt or .srt — translated on the Translations tab)</span></label>
+        <div class="row" style="align-items:center">
+          <span class="hint" data-capstatus style="flex:3;font-size:13px">${esc(capSummary(seg))}</span>
+          <div style="flex:0;display:flex;gap:6px;min-width:0">
+            <button class="btn ghost sm" data-act="uploadcap">Upload file</button>
+            <button class="btn ghost sm" data-act="editcap">${(seg.captions||"").trim() ? "Edit" : "Paste"}</button>
+            ${(seg.captions||"").trim() ? `<button class="btn danger sm" data-act="clearcap">Remove</button>` : ""}
+          </div>
+          <input type="file" accept=".vtt,.srt,text/vtt" class="hidden" data-capfile>
+        </div>
+        <textarea data-captext class="mono hidden" rows="8" placeholder="Paste WebVTT or SRT captions here">${esc(seg.captions||"")}</textarea>
+        ${["gdrive","boxcast"].includes(vt)
+          ? `<div class="hint" style="color:var(--bad)">Captions can't be shown on ${esc(VIDEO_TYPES[vt].label)}: its player is sealed. Use another source to show captions.</div>`
+          : `<div class="hint">Where to get them: Vimeo auto-generates English captions on your plan; review them in the video's captions settings, then download the .vtt. YouTube Studio → Subtitles can download a .vtt too, as can most transcription tools.</div>`}
         <label>Placeholder image <span style="font-weight:400;letter-spacing:0;text-transform:none;color:var(--muted)">(optional — shown instead of the player while the video field above is empty)</span></label>
         <div class="row" style="align-items:center">
           ${seg.placeholderImage ? `<img src="${esc(seg.placeholderImage)}" alt="" style="flex:0;width:120px;height:68px;object-fit:cover;border:1px solid var(--line)">` : ""}
@@ -647,6 +924,17 @@ function renderModules(){
     seg.questions.forEach((q, qi) => qHost.appendChild(renderQuestion(i, qi, q)));
     m.querySelectorAll("[data-rich]").forEach(el => richEditor(el, seg[el.dataset.rich] || "", html => { seg[el.dataset.rich] = html; markDirty(); }));
     const imgHost = st === "photo" ? m.querySelector("[data-imglist]") : null; if (imgHost) renderImageList(imgHost, seg);
+    const capFile = m.querySelector("[data-capfile]"), capText = m.querySelector("[data-captext]"), capStatus = m.querySelector("[data-capstatus]");
+    if (capFile) capFile.addEventListener("change", async e => {
+      const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+      const norm = normalizeCaptions(await f.text());
+      if (!vttCues(norm).length) { alert(`${f.name} doesn't contain any captions in WebVTT or SRT format.`); return; }
+      seg.captions = norm; markDirty(); renderModules();
+    });
+    if (capText) {
+      capText.addEventListener("input", () => { seg.captions = capText.value; markDirty(); capStatus.textContent = capSummary(seg); });
+      capText.addEventListener("change", () => { seg.captions = normalizeCaptions(capText.value); capText.value = seg.captions; capStatus.textContent = capSummary(seg); markDirty(); });
+    }
     if (st === "video" && (vt === "gdrive" || vt === "gdrivefile")) {
       const box = m.querySelector("[data-drivecheck]"), vin = m.querySelector("[data-f=video]");
       const run = () => driveCheck(seg, box);
@@ -690,10 +978,13 @@ function renderModules(){
       if (act==="del") { if (!confirm(`Delete module ${i+1} "${seg.title}"?`)) return; config.segments.splice(i,1); shiftOpen(i,-1); }
       else if (act==="up") { swap(i, i-1); }
       else if (act==="down") { swap(i, i+1); }
-      else if (act==="dup") { config.segments.splice(i+1,0,JSON.parse(JSON.stringify(seg))); openModules.add(i+1); }
+      else if (act==="dup") { config.segments.splice(i+1,0,stripIds(JSON.parse(JSON.stringify(seg)))); openModules.add(i+1); }
       else if (act==="addq") { seg.questions.push({ q:"", options:["","","",""], answer:0 }); openModules.add(i); }
       else if (act==="uploadimgs") { m.querySelector("[data-imgfile]").click(); return; }
       else if (act==="uploadplaceholder") { m.querySelector("[data-phfile]").click(); return; }
+      else if (act==="uploadcap") { m.querySelector("[data-capfile]").click(); return; }
+      else if (act==="editcap") { const ta = m.querySelector("[data-captext]"); ta.classList.toggle("hidden"); if (!ta.classList.contains("hidden")) ta.focus(); return; }
+      else if (act==="clearcap") { if (!confirm("Remove the captions from this module?")) return; seg.captions = ""; }
       else if (act==="addimgurl") { const u = prompt("Image URL (https://…)"); if (!u) return; seg.images = seg.images || []; seg.images.push({ url: u.trim(), caption:"" }); markDirty(); renderImageList(m.querySelector("[data-imglist]"), seg); return; }
       else if (act==="preview") { const pv = m.querySelector(".preview"); pv.classList.toggle("hidden"); pv.innerHTML = ""; if (!pv.classList.contains("hidden")) renderPreview(pv, seg); return; }
       markDirty(); renderModules();
@@ -802,8 +1093,8 @@ function renderSubs(){
   const passRate = all.length ? Math.round(100*all.filter(s=>String(s.passed).toLowerCase()==="true").length/all.length) : 0;
   $("stats").innerHTML = [[all.length,"Attempts"],[people.size,"Learners"],[completers.size,"Completed course"],[passRate+"%","First-try pass rate"]]
     .map(([n,l])=>`<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
-  const show = ["submittedAtLocal","name","email","segment","segmentTitle","attempt","score","passed","completedCourse","answers"];
-  const labels = { submittedAtLocal:"Submitted", name:"Name", email:"Email", segment:"#", segmentTitle:"Module", attempt:"Try", score:"Score", passed:"Result", completedCourse:"Finished", answers:"Answers" };
+  const show = ["submittedAtLocal","name","email","language","segment","segmentTitle","attempt","score","passed","completedCourse","answers"];
+  const labels = { submittedAtLocal:"Submitted", name:"Name", email:"Email", segment:"#", segmentTitle:"Module", attempt:"Try", score:"Score", passed:"Result", completedCourse:"Finished", answers:"Answers", language:"Lang" };
   $("subTable").querySelector("thead").innerHTML = "<tr>" + show.map(c=>`<th>${labels[c]}</th>`).join("") + "</tr>";
   $("subTable").querySelector("tbody").innerHTML = rows.map(s => "<tr>" + show.map(c => {
     let v = s[c];

@@ -11,6 +11,13 @@ Gated video training: learners enter name + email, watch each video segment, and
 
 A section is a **video module**, a **photo module** (one image or a slideshow — learners click to enlarge), or a **text-only section** (a header plus rich text). Any kind can carry quiz questions or be set to "No questions" so the learner just clicks Continue. A video module may be published without a video; a placeholder image (or a branded "coming soon" card) shows until one is added.
 
+## Languages and captions
+
+Learners choose a language from a menu on the course; the choice is remembered and logged with each submission. English is the source language.
+
+- **Translations tab (admin):** tick the languages to offer, then **Translate new & changed**. Text is machine-translated with Google Translate (built into Apps Script — no API key). Every line can be edited; edited lines are marked *Reviewed* and are never overwritten by re-translation. When the English changes, the translation is flagged *Outdated* and learners see the English until it is re-translated. Publishing offers to translate anything new or outdated first.
+- **Captions:** each video module accepts English captions as a `.vtt` or `.srt` file (Vimeo and YouTube can both export these from their auto-captions). Captions are translated line by line with the original timings. MP4, Dropbox and Drive (locked player) videos show them as native subtitles; YouTube and Vimeo show them as an overlay with CC and full-screen buttons. Drive-player and BoxCast embeds cannot show captions.
+
 ## Images
 
 Images uploaded in the dashboard are stored in a Google Drive folder named "<Sheet name> Images" next to the spreadsheet, shared read-only by link, and resized to a max of 1800px before upload. You can also reference any image by URL.
