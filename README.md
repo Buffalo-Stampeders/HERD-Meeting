@@ -15,9 +15,17 @@ A section is a **video module**, a **photo module** (one image or a slideshow �
 
 Images uploaded in the dashboard are stored in a Google Drive folder named "<Sheet name> Images" next to the spreadsheet, shared read-only by link, and resized to a max of 1800px before upload. You can also reference any image by URL.
 
-## Video sources
+## Video sources and playback lock
 
-Each module's video can be an **MP4/MOV file URL**, a **YouTube** link, a **Google Drive** share link (set to "Anyone with the link"), or a **BoxCast** embed code. The "watch the full video before the questions unlock" gate works for files and YouTube; Drive and BoxCast players can't report when playback ends, so those modules unlock their questions immediately. Each module can also carry optional notes shown under the video, either always visible or behind a "Show notes" toggle.
+| Source | Full-watch gate | Playback lock (1x, no skipping) |
+|---|---|---|
+| MP4/MOV file URL | ✓ | ✓ |
+| YouTube | ✓ | ✓ |
+| Google Drive (locked player) — streams the file through our player; MP4 only, **under 100 MB**, shared "Anyone with the link" | ✓ | ✓ |
+| Google Drive (Drive player) — any size | ✗ | ✗ |
+| BoxCast embed | ✗ | ✗ |
+
+"Lock playback" is a course-level setting (on by default). The dashboard checks Drive files against the account and warns when one is too large, not an MP4, or not shared publicly; a locked-player module over 100 MB is blocked from publishing. For long recordings, unlisted YouTube is the reliable way to keep the lock. Each module can also carry optional notes shown under the video, either always visible or behind a "Show notes" toggle.
 | `apps-script.gs` | Google Apps Script backend (bound to the Google Sheet). Stores the course config and logs submissions. |
 
 ## Live pages (GitHub Pages)

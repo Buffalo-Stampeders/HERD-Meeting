@@ -76,6 +76,9 @@
   .stat .l{font-size:11px;font-weight:700;color:var(--bronze);text-transform:uppercase;letter-spacing:2px;margin-top:4px}
   .hidden{display:none !important}
   .empty{color:var(--muted);text-align:center;padding:30px}
+  .drive-check{margin-top:6px;padding:8px 12px;font-size:13px;border-left:4px solid var(--bronze);background:var(--cream-light)}
+  .drive-check.bad{border-left-color:var(--bad);background:#fdecea;color:var(--bad);font-weight:600}
+  .drive-check.ok{border-left-color:var(--ok);background:#e8f5ec}
   /* image list */
   .imgrow{display:flex;gap:10px;align-items:center;padding:8px;border:1px solid var(--line);background:#fff;margin-bottom:6px}
   .imgrow img{width:96px;height:64px;object-fit:cover;flex:none;background:#eee;cursor:zoom-in}
@@ -179,6 +182,7 @@
         <div class="check"><input type="checkbox" id="requireFullWatch"><span>Learner must watch the whole video before questions unlock</span></div>
         <div class="check"><input type="checkbox" id="requireAllCorrect"><span>All answers must be correct to advance (otherwise retry)</span></div>
         <div class="check"><input type="checkbox" id="revealCorrect"><span>Show the correct answer after a wrong attempt</span></div>
+        <div class="check"><input type="checkbox" id="lockPlayback"><span>Lock playback — no speed changes, no skipping ahead <span class="hint" style="display:block">Applies to MP4 files, YouTube, and Google Drive (locked player). Drive embeds and BoxCast can't be controlled.</span></span></div>
       </div>
     </div>
 
@@ -237,7 +241,7 @@ let draftTimer = null;
 
 const DEFAULT_CONFIG = {
   courseTitle: "New Course", intro: "Watch each video, then answer the questions to unlock the next section.",
-  requireFullWatch: true, requireAllCorrect: true, revealCorrect: false,
+  requireFullWatch: true, requireAllCorrect: true, revealCorrect: false, lockPlayback: true,
   doneTitle: "Course complete", doneNote: "Your results have been recorded. You may close this page.",
   segments: []
 };
@@ -336,6 +340,7 @@ async function publish(){
   if (problems.length) { alert("Fix these before publishing:\n\n• " + problems.join("\n• ")); return; }
   $("saveBtn").disabled = true; setMsg("Publishing…");
   try {
+    config.segments.forEach(sg => delete sg._driveTooBig);
     const r = await api({}, { action:"saveConfig", key: conn.key, config });
     if (r.ok) { dirty = false; localStorage.removeItem("courseAdminDraft"); setMsg("Published " + new Date(r.updatedAt).toLocaleString() + ". Learners see the new version on their next page load.", "ok"); }
     else { setMsg("Publish failed: " + (r.error||"unknown error"), "bad"); $("saveBtn").disabled = false; }
@@ -355,7 +360,8 @@ function validate(){
     const vt = segType(s), v = (s.video||"").trim();
     if (!v) { /* allowed: placeholder image (or default card) is shown instead */ }
     else if (vt === "youtube" && !youtubeId(v)) p.push(`${n}: not a valid YouTube link.`);
-    else if (vt === "gdrive" && !driveId(v)) p.push(`${n}: not a valid Google Drive file link.`);
+    else if ((vt === "gdrive" || vt === "gdrivefile") && !driveId(v)) p.push(`${n}: not a valid Google Drive file link.`);
+    else if (vt === "gdrivefile" && s._driveTooBig) p.push(`${n}: that Drive file is over 100 MB and won't stream in the locked player. Switch it to "Google Drive (Drive player)" or upload to YouTube.`);
     else if (vt === "boxcast" && !/boxcast|<iframe|<script/i.test(v)) p.push(`${n}: paste the BoxCast embed code or a boxcast.tv URL.`);
     else if (vt === "file" && !/^https?:\/\//i.test(v)) p.push(`${n}: video file URL must start with http(s)://.`);
     s.videoType = vt;
@@ -385,6 +391,7 @@ function render(){
   $("requireFullWatch").checked = !!config.requireFullWatch;
   $("requireAllCorrect").checked = !!config.requireAllCorrect;
   $("revealCorrect").checked = !!config.revealCorrect;
+  $("lockPlayback").checked = config.lockPlayback !== false;
   renderModules();
 }
 
@@ -393,8 +400,10 @@ const VIDEO_TYPES = {
              hint:"Direct link to the file. MOV plays only in Safari; use MP4 (H.264) for everyone else. Supports the \"watch the full video\" gate." },
   youtube: { label:"YouTube",         field:"YouTube link",   placeholder:"https://www.youtube.com/watch?v=… or https://youtu.be/…",
              hint:"Any YouTube link (watch, share, Shorts, or embed URL). Video must be Public or Unlisted. Supports the \"watch the full video\" gate." },
-  gdrive:  { label:"Google Drive",    field:"Google Drive share link", placeholder:"https://drive.google.com/file/d/…/view?usp=sharing",
-             hint:"Right-click the video in Drive → Share → set to \"Anyone with the link\" → Copy link. Drive's player can't report when the video ends, so questions unlock immediately for this module." },
+  gdrivefile:{ label:"Google Drive (locked player)", field:"Google Drive share link", placeholder:"https://drive.google.com/file/d/…/view?usp=sharing",
+             hint:"Streams the Drive file through the course's own player, so the full-watch gate and playback lock both work. Requirements: shared as \"Anyone with the link\", an MP4 (H.264) file, and <strong>under 100 MB</strong> — larger files hit Google's virus-scan page and won't play. For longer recordings use unlisted YouTube." },
+  gdrive:  { label:"Google Drive (Drive player)", field:"Google Drive share link", placeholder:"https://drive.google.com/file/d/…/view?usp=sharing",
+             hint:"Uses Google's own player. Any size or format Drive can play, but Drive's player can't report progress — so the full-watch gate and playback lock don't apply, and questions unlock immediately. Share the file as \"Anyone with the link\"." },
   boxcast: { label:"BoxCast",         field:"BoxCast embed code or URL", placeholder:"<iframe src=\"https://boxcast.tv/view-embed/…\"> or the <script> snippet from BoxCast → Embed",
              hint:"Paste the full embed code from BoxCast (iframe or script version) or the view-embed URL. BoxCast's player can't report when the video ends, so questions unlock immediately for this module." }
 };
@@ -406,12 +415,33 @@ function segType(seg){
 const youtubeId = s => { const m = (s||"").match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/|v\/))([A-Za-z0-9_-]{11})/) || (s||"").match(/^([A-Za-z0-9_-]{11})$/); return m ? m[1] : null; };
 const driveId   = s => { const m = (s||"").match(/\/d\/([A-Za-z0-9_-]{20,})/) || (s||"").match(/[?&]id=([A-Za-z0-9_-]{20,})/) || (s||"").match(/^([A-Za-z0-9_-]{20,})$/); return m ? m[1] : null; };
 
+const DRIVE_LIMIT = 100 * 1024 * 1024;
+const fmtMB = b => (b / 1048576).toFixed(b > 10485760 ? 0 : 1) + " MB";
+async function driveCheck(seg, box){
+  const id = driveId(seg.video); seg._driveTooBig = false;
+  if (!id) { box.classList.add("hidden"); return; }
+  box.className = "drive-check"; box.textContent = "Checking Drive file…";
+  try {
+    const r = await api({}, { action:"driveFileInfo", key: conn.key, id });
+    if (!r.ok) { box.className = "drive-check"; box.textContent = "Couldn't check this file: " + r.error; return; }
+    const locked = segType(seg) === "gdrivefile", isMp4 = /mp4/i.test(r.mime), tooBig = r.size > DRIVE_LIMIT;
+    const parts = [`<strong>${esc(r.name)}</strong> · ${fmtMB(r.size)} · ${esc(r.mime)}`];
+    let cls = "ok";
+    if (!r.publicLink) { parts.push("⚠ Not shared as “Anyone with the link” — learners won't be able to play it."); cls = "bad"; }
+    if (locked && tooBig) { parts.push(`⚠ Over 100 MB (${fmtMB(r.size)}). The locked player can't stream files this large — switch the source to “Google Drive (Drive player)”, or upload to YouTube (unlisted) to keep the lock.`); cls = "bad"; seg._driveTooBig = true; }
+    if (locked && !isMp4) { parts.push(`⚠ Not an MP4 (${esc(r.mime)}). The locked player needs MP4/H.264; MOV only plays in Safari.`); cls = "bad"; }
+    if (!locked && tooBig) parts.push(`Note: over 100 MB, so the locked player isn't an option for this file — Drive player is the right choice here (lock and full-watch gate won't apply).`);
+    box.className = "drive-check " + cls; box.innerHTML = parts.join("<br>");
+  } catch (err) { box.className = "drive-check"; box.textContent = "Couldn't reach the backend to check this file."; }
+}
+
 function renderPreview(pv, seg){
   const t = segType(seg), src = (seg.video||"").trim();
   const frame = (url) => { const f = document.createElement("iframe"); f.src = url; f.allow = "autoplay; fullscreen"; f.allowFullscreen = true; f.style.cssText = "width:100%;aspect-ratio:16/9;border:0;display:block"; return f; };
   if (t === "file") { const v = document.createElement("video"); v.controls = true; v.preload = "metadata"; v.src = src; pv.appendChild(v); }
   else if (t === "youtube") { const id = youtubeId(src); pv.appendChild(id ? frame(`https://www.youtube.com/embed/${id}?rel=0`) : warn("That doesn't look like a YouTube link.")); }
   else if (t === "gdrive") { const id = driveId(src); pv.appendChild(id ? frame(`https://drive.google.com/file/d/${id}/preview`) : warn("That doesn't look like a Google Drive file link.")); }
+  else if (t === "gdrivefile") { const id = driveId(src); if (!id) pv.appendChild(warn("That doesn't look like a Google Drive file link.")); else { const v = document.createElement("video"); v.controls = true; v.preload = "metadata"; v.src = `https://drive.google.com/uc?export=download&id=${id}`; v.onerror = () => pv.replaceChildren(warn("Couldn't stream this file. Check sharing (Anyone with the link), that it's an MP4, and that it's under 100 MB.")); pv.appendChild(v); } }
   else if (t === "boxcast") {
     if (/^https?:\/\//i.test(src) && !/</.test(src)) pv.appendChild(frame(src));
     else { const tpl = document.createElement("template"); tpl.innerHTML = src;
@@ -576,6 +606,7 @@ function renderModules(){
           <div style="flex:0"><button class="btn ghost sm" data-act="preview">Preview video</button></div>
         </div>
         <div class="hint video-hint">${VIDEO_TYPES[vt].hint}</div>
+        <div class="drive-check hidden" data-drivecheck></div>
         <div class="preview hidden"></div>
         <label>Placeholder image <span style="font-weight:400;letter-spacing:0;text-transform:none;color:var(--muted)">(optional — shown instead of the player while the video field above is empty)</span></label>
         <div class="row" style="align-items:center">
@@ -606,6 +637,11 @@ function renderModules(){
     seg.questions.forEach((q, qi) => qHost.appendChild(renderQuestion(i, qi, q)));
     m.querySelectorAll("[data-rich]").forEach(el => richEditor(el, seg[el.dataset.rich] || "", html => { seg[el.dataset.rich] = html; markDirty(); }));
     const imgHost = st === "photo" ? m.querySelector("[data-imglist]") : null; if (imgHost) renderImageList(imgHost, seg);
+    if (st === "video" && (vt === "gdrive" || vt === "gdrivefile")) {
+      const box = m.querySelector("[data-drivecheck]"), vin = m.querySelector("[data-f=video]");
+      const run = () => driveCheck(seg, box);
+      run(); vin.addEventListener("change", run);
+    }
     const imgFile = m.querySelector("[data-imgfile]"), upStatus = m.querySelector("[data-upstatus]");
     if (imgFile) imgFile.addEventListener("change", async e => {
       const files = [...e.target.files]; e.target.value = ""; if (!files.length) return;
@@ -699,7 +735,7 @@ function renderQuestion(mi, qi, q){
 /* course-level fields */
 [["courseTitle","courseTitle"],["intro","intro"],["doneTitle","doneTitle"],["doneNote","doneNote"]].forEach(([id,k]) =>
   $(id).addEventListener("input", e => { config[k] = e.target.value; markDirty(); }));
-["requireFullWatch","requireAllCorrect","revealCorrect"].forEach(k =>
+["requireFullWatch","requireAllCorrect","revealCorrect","lockPlayback"].forEach(k =>
   $(k).addEventListener("change", e => { config[k] = e.target.checked; markDirty(); }));
 
 function addSegment(seg){

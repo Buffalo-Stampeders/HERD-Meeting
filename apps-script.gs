@@ -87,6 +87,19 @@ function doPost(e) {
       return json({ ok: isAdmin(data.key) });
     }
 
+    // Drive video check from admin.html: size / type / sharing, so the dashboard can warn before publishing.
+    if (data.action === "driveFileInfo") {
+      if (!isAdmin(data.key)) return json({ ok: false, error: "Unauthorized" });
+      try {
+        const f = DriveApp.getFileById(String(data.id));
+        let publicLink = false;
+        try { const a = f.getSharingAccess(); publicLink = (a === DriveApp.Access.ANYONE_WITH_LINK || a === DriveApp.Access.ANYONE); } catch (_) {}
+        return json({ ok: true, name: f.getName(), size: f.getSize(), mime: f.getMimeType(), publicLink: publicLink });
+      } catch (err) {
+        return json({ ok: false, error: "This Google account can't open that file (check the link, or that it's shared with you)." });
+      }
+    }
+
     // Image upload from admin.html: saved to a Drive folder next to this sheet, shared read-only
     // by link, and served back as a direct image URL for the course page.
     if (data.action === "uploadImage") {

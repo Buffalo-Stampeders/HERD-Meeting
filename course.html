@@ -183,6 +183,8 @@ let CONFIG = {
 
   // Must the learner watch the whole video before the quiz unlocks?
   requireFullWatch: true,
+  // Keep video at 1x and prevent skipping ahead (file and YouTube players; Drive/BoxCast embeds can't be controlled).
+  lockPlayback: true,
   // Must every answer be correct to advance? (false = one attempt, any score advances)
   requireAllCorrect: true,
   // Show which option was correct after a wrong attempt?
@@ -302,6 +304,8 @@ function videoEnded(){
   $("videoNote").textContent = isNoQuiz(CONFIG.segments[state.idx]) ? "Video complete — click Continue." : "Video complete — answer the questions below.";
 }
 const gating = () => CONFIG.requireFullWatch && !state.watched;
+// "Locked" = no skipping past the furthest point already watched, and no speed changes. Rewinding is fine.
+const locking = () => CONFIG.lockPlayback !== false && !state.watched;
 
 // Work out what kind of source a segment has. Older configs only have `video` (a file URL).
 function detectType(seg){
@@ -341,6 +345,7 @@ function renderVideo(seg){
       ytPlayer = new YT.Player("ytHost", {
         videoId: id, playerVars: { rel:0, modestbranding:1, playsinline:1, enablejsapi:1, origin: location.origin },
         events: {
+          onPlaybackRateChange: e => { if (CONFIG.lockPlayback !== false && e.data !== 1) ytPlayer.setPlaybackRate(1); },
           onStateChange: e => {
             if (e.data === YT.PlayerState.ENDED) videoEnded();
             if (e.data === YT.PlayerState.PLAYING && !ytPoll) {
@@ -348,7 +353,8 @@ function renderVideo(seg){
               ytPoll = setInterval(() => {
                 if (!ytPlayer || !ytPlayer.getCurrentTime) return;
                 const t = ytPlayer.getCurrentTime();
-                if (gating() && t > ytLast + 2) ytPlayer.seekTo(ytLast, true); else ytLast = Math.max(ytLast, t);
+                if ((gating() || locking()) && t > ytLast + 2) ytPlayer.seekTo(ytLast, true); else ytLast = Math.max(ytLast, t);
+                if (CONFIG.lockPlayback !== false && ytPlayer.getPlaybackRate && ytPlayer.getPlaybackRate() !== 1) ytPlayer.setPlaybackRate(1);
               }, 500);
             }
           }
@@ -364,6 +370,11 @@ function renderVideo(seg){
     return type;
   }
 
+  if (type === "gdrivefile") {
+    // Direct MP4 stream from Drive (file must be "Anyone with the link"; ~100 MB max before Google's scan page blocks it).
+    return renderFilePlayer(wrap, `https://drive.google.com/uc?export=download&id=${driveId(seg.video)}`, type);
+  }
+
   if (type === "gdrive") {
     const f = document.createElement("iframe");
     f.src = `https://drive.google.com/file/d/${driveId(seg.video)}/preview`;
@@ -372,11 +383,23 @@ function renderVideo(seg){
   }
 
   // Default: direct MP4/MOV file.
-  const v = document.createElement("video"); v.controls = true; v.playsInline = true; v.preload = "metadata"; v.src = seg.video;
-  let last = 0;
+  return renderFilePlayer(wrap, seg.video, type);
+}
+
+function renderFilePlayer(wrap, src, type){
+  const v = document.createElement("video"); v.controls = true; v.playsInline = true; v.preload = "metadata"; v.src = src;
+  const lock = CONFIG.lockPlayback !== false;
+  if (lock) { v.setAttribute("controlsList", "noplaybackrate nodownload"); v.disablePictureInPicture = true; }
+  let furthest = 0;
   v.addEventListener("ended", videoEnded);
-  v.addEventListener("timeupdate", () => { if (!v.seeking) last = v.currentTime; });
-  v.addEventListener("seeking", () => { if (gating() && v.currentTime > last + 1.5) v.currentTime = last; });
+  v.addEventListener("timeupdate", () => { if (!v.seeking) furthest = Math.max(furthest, v.currentTime); });
+  v.addEventListener("seeking", () => { if ((gating() || locking()) && v.currentTime > furthest + 1.5) v.currentTime = furthest; });
+  if (lock) v.addEventListener("ratechange", () => { if (v.playbackRate !== 1) v.playbackRate = 1; });
+  v.addEventListener("error", () => {
+    const d = document.createElement("div"); d.className = "placeholder-default";
+    d.innerHTML = `<small>Video unavailable</small><div style="font-size:15px;font-family:var(--font-body);font-weight:400;color:#fff">This video could not be loaded. ${type === "gdrivefile" ? "Check that the Drive file is shared with “Anyone with the link”, is an MP4, and is under 100 MB." : ""}</div>`;
+    wrap.innerHTML = ""; wrap.appendChild(d);
+  });
   wrap.appendChild(v);
   return type;
 }
