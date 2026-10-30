@@ -315,7 +315,19 @@ function detectType(seg){
   if (/boxcast/.test(v)) return "boxcast";
   if (/drive\.google\.com/.test(v)) return "gdrive";
   if (/dropbox\.com/.test(v)) return "dropbox";
+  if (/vimeo\.com/.test(v)) return "vimeo";
   return "file";
+}
+// Vimeo: numeric id plus the unlisted hash ("h") when present. Accepts vimeo.com/ID, vimeo.com/ID/HASH,
+// player.vimeo.com/video/ID?h=HASH, vimeo.com/manage/videos/ID, or a bare ID.
+function vimeoRef(input){
+  const str = (input||"").trim();
+  let m = str.match(/vimeo\.com\/(?:video\/|manage\/videos\/|channels\/[^/]+\/|groups\/[^/]+\/videos\/)?(\d{6,})(?:\/([a-zA-Z0-9]+))?/);
+  if (!m) m = str.match(/^(\d{6,})(?:\/([a-zA-Z0-9]+))?$/);
+  if (!m) return null;
+  let h = m[2] || null;
+  try { h = h || new URL(str).searchParams.get("h"); } catch(_){}
+  return { id: m[1], h };
 }
 // Turn a Dropbox share link into a direct stream URL (dl.dropboxusercontent.com serves the raw file).
 function dropboxDirect(url){
@@ -337,8 +349,9 @@ function youtubeId(input){
   return m ? m[1] : null;
 }
 
-let ytPlayer = null, ytPoll = null, ytLast = 0;
+let ytPlayer = null, ytPoll = null, ytLast = 0, vmPlayer = null;
 function destroyPlayers(){
+  if (vmPlayer) { try { vmPlayer.unload && vmPlayer.destroy && vmPlayer.destroy(); } catch(_){} vmPlayer = null; }
   if (ytPoll) { clearInterval(ytPoll); ytPoll = null; }
   if (ytPlayer && ytPlayer.destroy) { try { ytPlayer.destroy(); } catch(_){} }
   ytPlayer = null; ytLast = 0;
@@ -378,6 +391,26 @@ function renderVideo(seg){
   if (type === "boxcast") {
     const host = document.createElement("div"); host.className = "embed-host";
     injectEmbed(host, seg.video); wrap.appendChild(host);
+    return type;
+  }
+
+  if (type === "vimeo") {
+    const ref = vimeoRef(seg.video);
+    const lock = CONFIG.lockPlayback !== false;
+    const q = new URLSearchParams({ dnt:1, title:0, byline:0, portrait:0, pip:0, playsinline:1, color:"00492B", ...(lock ? { speed:0 } : {}), ...(ref.h ? { h: ref.h } : {}) });
+    const f = document.createElement("iframe"); f.id = "vimeoFrame"; f.src = `https://player.vimeo.com/video/${ref.id}?${q}`;
+    f.allow = "autoplay; fullscreen; picture-in-picture"; f.allowFullscreen = true; wrap.appendChild(f);
+    loadVimeoApi().then(() => {
+      if (!window.Vimeo || !Vimeo.Player) return;
+      let furthest = 0, snapping = false;
+      vmPlayer = new Vimeo.Player(f);
+      vmPlayer.on("ended", videoEnded);
+      vmPlayer.on("timeupdate", d => { if (!snapping) furthest = Math.max(furthest, d.seconds); });
+      vmPlayer.on("seeked", d => {
+        if ((gating() || locking()) && d.seconds > furthest + 2) { snapping = true; vmPlayer.setCurrentTime(furthest).finally(() => { snapping = false; }); }
+      });
+      if (lock) vmPlayer.on("playbackratechange", d => { if (d.playbackRate !== 1) vmPlayer.setPlaybackRate(1).catch(()=>{}); });
+    }).catch(() => {});
     return type;
   }
 
@@ -436,6 +469,14 @@ function injectEmbed(host, code){
   host.appendChild(tpl.content);
 }
 
+let vmApiPromise = null;
+function loadVimeoApi(){
+  if (window.Vimeo && window.Vimeo.Player) return Promise.resolve();
+  if (!vmApiPromise) vmApiPromise = new Promise((res, rej) => {
+    const s = document.createElement("script"); s.src = "https://player.vimeo.com/api/player.js"; s.onload = res; s.onerror = rej; document.head.appendChild(s);
+  });
+  return vmApiPromise;
+}
 let ytApiPromise = null;
 function loadYouTubeApi(){
   if (window.YT && window.YT.Player) return Promise.resolve();
