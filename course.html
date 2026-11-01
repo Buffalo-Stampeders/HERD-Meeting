@@ -104,6 +104,8 @@
   .cc-overlay{position:absolute;left:0;right:0;bottom:13%;display:flex;justify-content:center;pointer-events:none;z-index:3;padding:0 6%}
   .cc-overlay span{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(14px,2.3vw,22px);line-height:1.35;padding:4px 10px;text-align:center;white-space:pre-line;max-width:100%}
   .cc-overlay span:empty{display:none}
+  .skip-toast{position:absolute;left:50%;top:12px;transform:translateX(-50%);z-index:5;background:var(--green);color:#fff;font-size:13px;font-weight:600;padding:7px 14px;border-left:4px solid var(--tan);pointer-events:none;opacity:0;transition:opacity .2s;max-width:90%;text-align:center}
+  .skip-toast.show{opacity:1}
   .cc-btn,.fs-btn{position:absolute;top:8px;z-index:4;background:rgba(0,0,0,.65);color:#fff;border:1px solid rgba(255,255,255,.45);font:inherit;font-size:11px;font-weight:700;letter-spacing:1px;padding:5px 9px;cursor:pointer}
   .cc-btn{left:8px} .fs-btn{left:58px}
   .cc-btn[aria-pressed=false]{opacity:.6;text-decoration:line-through}
@@ -259,7 +261,8 @@ const UI = {
   cont:"Continue", finish:"Finish", recording:"Recording your answers…", recordingShort:"Recording…",
   correct:"Correct — {score}.", tryAgain:"{score} correct. Review the video and try again.",
   showNotes:"Show notes", hideNotes:"Hide notes", comingSoon:"Video coming soon", unavailable:"Video unavailable",
-  unavailableBody:"This video could not be loaded.", preview:"PREVIEW — submissions not logged", captions:"Captions", fullscreen:"Full screen"
+  unavailableBody:"This video could not be loaded.", preview:"PREVIEW — submissions not logged", captions:"Captions", fullscreen:"Full screen",
+  noSkip:"Skipping ahead isn't allowed — please keep watching."
 };
 const LANG_NAMES = { en:"English", es:"Español", ht:"Kreyòl ayisyen", pt:"Português", fr:"Français", vi:"Tiếng Việt", "zh-CN":"中文（简体）",
   "zh-TW":"中文（繁體）", tl:"Tagalog", ar:"العربية", ru:"Русский", ko:"한국어", de:"Deutsch", it:"Italiano", ja:"日本語", pl:"Polski", uk:"Українська", hi:"हिन्दी" };
@@ -388,6 +391,14 @@ function videoEnded(){
   setNote(isNoQuiz(CONFIG.segments[state.idx]) ? "videoDoneContinue" : "videoDoneAnswer");
 }
 const gating = () => CONFIG.requireFullWatch && !state.watched;
+// Brief notice on the video when a skip ahead is blocked.
+let toastTimer = null;
+function skipNotice(){
+  const wrap = $("videoWrap"); let t = wrap.querySelector(".skip-toast");
+  if (!t) { t = document.createElement("div"); t.className = "skip-toast"; t.setAttribute("role", "status"); wrap.appendChild(t); }
+  t.textContent = ui("noSkip"); t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
+}
 // "Locked" = no skipping past the furthest point already watched, and no speed changes. Rewinding is fine.
 const locking = () => CONFIG.lockPlayback !== false && !state.reachedEnd;
 
@@ -462,14 +473,14 @@ function renderVideo(seg){
           onStateChange: e => {
             if (e.data === YT.PlayerState.ENDED) {
               const dur = (ytPlayer && ytPlayer.getDuration && ytPlayer.getDuration()) || 0;
-              if (!(gating() || locking()) || !dur || ytLast >= dur - 3) videoEnded(); else { ytPlayer.seekTo(ytLast, true); ytPlayer.playVideo && ytPlayer.playVideo(); }
+              if (!(gating() || locking()) || !dur || ytLast >= dur - 3) videoEnded(); else { ytPlayer.seekTo(ytLast, true); ytPlayer.playVideo && ytPlayer.playVideo(); skipNotice(); }
             }
             if (e.data === YT.PlayerState.PLAYING && !ytPoll) {
               // Discourage scrubbing ahead while the gate is active.
               ytPoll = setInterval(() => {
                 if (!ytPlayer || !ytPlayer.getCurrentTime) return;
                 const t = ytPlayer.getCurrentTime();
-                if ((gating() || locking()) && t > ytLast + 2) ytPlayer.seekTo(ytLast, true); else ytLast = Math.max(ytLast, t);
+                if ((gating() || locking()) && t > ytLast + 2) { ytPlayer.seekTo(ytLast, true); skipNotice(); } else ytLast = Math.max(ytLast, t);
                 if (CONFIG.lockPlayback !== false && ytPlayer.getPlaybackRate && ytPlayer.getPlaybackRate() !== 1) ytPlayer.setPlaybackRate(1);
               }, 500);
             }
@@ -501,8 +512,10 @@ function renderVideo(seg){
       // Vimeo reports a scrub as a time update BEFORE it reports the seek, so the time update itself has to
       // catch the jump: at 1x, real playback can't move more than ~2 s between updates.
       const snapBack = () => {
-        if (snapping) return; snapping = true;
-        vmPlayer.setCurrentTime(furthest).catch(()=>{}).finally(() => setTimeout(() => { snapping = false; }, 400));
+        if (snapping) return; snapping = true; skipNotice();
+        vmPlayer.setCurrentTime(furthest).catch(()=>{})
+          .then(() => vmPlayer.play().catch(()=>{}))      // a drag to the end pauses the player; carry on playing
+          .finally(() => setTimeout(() => { snapping = false; }, 400));
       };
       try { vmPlayer.getDuration().then(d => { duration = d || 0; }).catch(()=>{}); } catch (_) {}
       vmPlayer.on("timeupdate", d => {
@@ -550,10 +563,10 @@ function renderFilePlayer(wrap, src, type){
   if (lock) { v.setAttribute("controlsList", "noplaybackrate nodownload"); v.disablePictureInPicture = true; }
   let furthest = 0;
   v.addEventListener("ended", () => {
-    if (!(gating() || locking()) || !v.duration || furthest >= v.duration - 3) videoEnded(); else v.currentTime = furthest;
+    if (!(gating() || locking()) || !v.duration || furthest >= v.duration - 3) videoEnded(); else { v.currentTime = furthest; v.play().catch(()=>{}); skipNotice(); }
   });
   v.addEventListener("timeupdate", () => { if (!v.seeking) furthest = Math.max(furthest, v.currentTime); });
-  v.addEventListener("seeking", () => { if ((gating() || locking()) && v.currentTime > furthest + 1.5) v.currentTime = furthest; });
+  v.addEventListener("seeking", () => { if ((gating() || locking()) && v.currentTime > furthest + 1.5) { v.currentTime = furthest; skipNotice(); } });
   if (lock) v.addEventListener("ratechange", () => { if (v.playbackRate !== 1) v.playbackRate = 1; });
   v.addEventListener("error", () => {
     const d = document.createElement("div"); d.className = "placeholder-default";
