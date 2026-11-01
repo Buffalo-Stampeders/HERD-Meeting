@@ -459,7 +459,10 @@ function renderVideo(seg){
           onReady: () => { if (ownCaps) ccTimer = setInterval(() => { if (ytPlayer && ytPlayer.getCurrentTime) ccUpdate(ytPlayer.getCurrentTime()); }, 250); },
           onPlaybackRateChange: e => { if (CONFIG.lockPlayback !== false && e.data !== 1) ytPlayer.setPlaybackRate(1); },
           onStateChange: e => {
-            if (e.data === YT.PlayerState.ENDED) videoEnded();
+            if (e.data === YT.PlayerState.ENDED) {
+              const dur = (ytPlayer && ytPlayer.getDuration && ytPlayer.getDuration()) || 0;
+              if (!(gating() || locking()) || !dur || ytLast >= dur - 3) videoEnded(); else { ytPlayer.seekTo(ytLast, true); ytPlayer.playVideo && ytPlayer.playVideo(); }
+            }
             if (e.data === YT.PlayerState.PLAYING && !ytPoll) {
               // Discourage scrubbing ahead while the gate is active.
               ytPoll = setInterval(() => {
@@ -491,12 +494,26 @@ function renderVideo(seg){
     wrap.appendChild(f); state.playerKind = "overlay";
     loadVimeoApi().then(() => {
       if (!window.Vimeo || !Vimeo.Player) return;
-      let furthest = 0, snapping = false;
+      let furthest = 0, snapping = false, duration = 0;
       vmPlayer = new Vimeo.Player(f);
-      vmPlayer.on("ended", videoEnded);
-      vmPlayer.on("timeupdate", d => { if (!snapping) furthest = Math.max(furthest, d.seconds); ccUpdate(d.seconds); });
+      const guarded = () => gating() || locking();
+      // Vimeo reports a scrub as a time update BEFORE it reports the seek, so the time update itself has to
+      // catch the jump: at 1x, real playback can't move more than ~2 s between updates.
+      const snapBack = () => {
+        if (snapping) return; snapping = true;
+        vmPlayer.setCurrentTime(furthest).catch(()=>{}).finally(() => setTimeout(() => { snapping = false; }, 400));
+      };
+      try { vmPlayer.getDuration().then(d => { duration = d || 0; }).catch(()=>{}); } catch (_) {}
+      vmPlayer.on("timeupdate", d => {
+        if (d.duration) duration = d.duration;
+        if (snapping) return;
+        if (guarded() && d.seconds > furthest + 2) { snapBack(); return; }
+        furthest = Math.max(furthest, d.seconds); ccUpdate(d.seconds);
+      });
+      vmPlayer.on("seeking", d => { if (guarded() && d.seconds > furthest + 2) snapBack(); });
+      vmPlayer.on("ended", () => { if (!guarded() || !duration || furthest >= duration - 3) videoEnded(); else snapBack(); });
       vmPlayer.on("seeked", d => {
-        if ((gating() || locking()) && d.seconds > furthest + 2) { snapping = true; vmPlayer.setCurrentTime(furthest).finally(() => { snapping = false; }); }
+        if (guarded() && d.seconds > furthest + 2) snapBack();
       });
       if (lock) vmPlayer.on("playbackratechange", d => { if (d.playbackRate !== 1) vmPlayer.setPlaybackRate(1).catch(()=>{}); });
       vimeoNativeCaptions();
@@ -531,7 +548,9 @@ function renderFilePlayer(wrap, src, type){
   const lock = CONFIG.lockPlayback !== false;
   if (lock) { v.setAttribute("controlsList", "noplaybackrate nodownload"); v.disablePictureInPicture = true; }
   let furthest = 0;
-  v.addEventListener("ended", videoEnded);
+  v.addEventListener("ended", () => {
+    if (!(gating() || locking()) || !v.duration || furthest >= v.duration - 3) videoEnded(); else v.currentTime = furthest;
+  });
   v.addEventListener("timeupdate", () => { if (!v.seeking) furthest = Math.max(furthest, v.currentTime); });
   v.addEventListener("seeking", () => { if ((gating() || locking()) && v.currentTime > furthest + 1.5) v.currentTime = furthest; });
   if (lock) v.addEventListener("ratechange", () => { if (v.playbackRate !== 1) v.playbackRate = 1; });
