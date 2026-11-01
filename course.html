@@ -316,7 +316,7 @@ function renderProgress(){
 
 function showSegment(i){
   const seg = CONFIG.segments[i];
-  state.idx = i; state.attempts = 0; state.watched = !CONFIG.requireFullWatch; state.startedAt = new Date();
+  state.idx = i; state.attempts = 0; state.watched = !CONFIG.requireFullWatch; state.reachedEnd = false; state.startedAt = new Date();
   $("startCard").classList.add("hidden"); $("doneCard").classList.add("hidden");
   $("segmentCard").classList.remove("hidden");
   const st = segKind(seg);
@@ -382,13 +382,14 @@ const isNoQuiz = seg => !!seg.noQuiz || !(seg.questions && seg.questions.length)
 
 /* ---------------- video players ---------------- */
 function videoEnded(){
+  state.reachedEnd = true;
   if (state.watched) return;
   state.watched = true; $("quiz").classList.remove("locked");
   setNote(isNoQuiz(CONFIG.segments[state.idx]) ? "videoDoneContinue" : "videoDoneAnswer");
 }
 const gating = () => CONFIG.requireFullWatch && !state.watched;
 // "Locked" = no skipping past the furthest point already watched, and no speed changes. Rewinding is fine.
-const locking = () => CONFIG.lockPlayback !== false && !state.watched;
+const locking = () => CONFIG.lockPlayback !== false && !state.reachedEnd;
 
 // Work out what kind of source a segment has. Older configs only have `video` (a file URL).
 function detectType(seg){
