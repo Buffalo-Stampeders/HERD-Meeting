@@ -28,6 +28,8 @@
   .card{background:var(--card);border:1px solid var(--line);border-top:3px solid var(--green);padding:20px;margin-bottom:16px}
   .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
   .row > *{flex:1;min-width:180px}
+  .row > .tight{flex:0 0 auto;min-width:0}
+  .btn-group{display:flex;gap:6px;flex-wrap:wrap}
   label{display:block;font-size:11px;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:2px;margin:12px 0 5px}
   input[type=text],input[type=url],input[type=password],textarea,select{width:100%;font:inherit;font-weight:500;padding:9px 11px;border:1px solid var(--line);border-radius:3px;background:#fff;color:var(--ink)}
   textarea{min-height:60px;resize:vertical}
@@ -166,7 +168,7 @@
       <div class="row">
         <div style="flex:3"><label>Backend URL</label><input type="url" id="endpoint" placeholder="https://script.google.com/macros/s/…/exec"></div>
         <div style="flex:2"><label>Admin key</label><input type="password" id="adminKey" placeholder="ADMIN_KEY from apps-script.gs"></div>
-        <div style="flex:0"><button class="btn" id="connectBtn">Connect</button></div>
+        <div class="tight"><button class="btn" id="connectBtn">Connect</button></div>
       </div>
       <p class="hint" id="connStatus"></p>
     </div>
@@ -390,7 +392,7 @@ async function publish(){
   }
   $("saveBtn").disabled = true; setMsg("Publishing…");
   try {
-    config.segments.forEach(sg => delete sg._driveTooBig);
+    config.segments.forEach(sg => { delete sg._driveTooBig; delete sg._vimeoUnresolved; });
     const r = await api({}, { action:"saveConfig", key: conn.key, config });
     if (r.ok) { if (!$("tab-translations").classList.contains("hidden")) renderTranslations(); dirty = false; localStorage.removeItem("courseAdminDraft"); setMsg("Published " + new Date(r.updatedAt).toLocaleString() + ". Learners see the new version on their next page load.", "ok"); }
     else { setMsg("Publish failed: " + (r.error||"unknown error"), "bad"); $("saveBtn").disabled = false; }
@@ -412,7 +414,9 @@ function validate(){
     else if (vt === "youtube" && !youtubeId(v)) p.push(`${n}: not a valid YouTube link.`);
     else if ((vt === "gdrive" || vt === "gdrivefile") && !driveId(v)) p.push(`${n}: not a valid Google Drive file link.`);
     else if (vt === "dropbox" && !dropboxDirect(v)) p.push(`${n}: not a valid Dropbox share link.`);
-    else if (vt === "vimeo" && !vimeoRef(v)) p.push(`${n}: not a valid Vimeo link.`);
+    else if (vt === "vimeo" && !vimeoRef(v)) p.push(isVimeoCustom(v)
+      ? `${n}: this custom Vimeo link couldn't be converted. In Vimeo, open the video → Share → Embed, copy the embed code, and paste it into the video field.`
+      : `${n}: not a valid Vimeo link.`);
     else if (vt === "gdrivefile" && s._driveTooBig) p.push(`${n}: that Drive file is over 100 MB and won't stream in the locked player. Switch it to "Google Drive (Drive player)" or upload to YouTube.`);
     else if (vt === "boxcast" && !/boxcast|<iframe|<script/i.test(v)) p.push(`${n}: paste the BoxCast embed code or a boxcast.tv URL.`);
     else if (vt === "file" && !/^https?:\/\//i.test(v)) p.push(`${n}: video file URL must start with http(s)://.`);
@@ -454,8 +458,8 @@ const VIDEO_TYPES = {
              hint:"Direct link to the file. MOV plays only in Safari; use MP4 (H.264) for everyone else. Supports the \"watch the full video\" gate." },
   youtube: { label:"YouTube",         field:"YouTube link",   placeholder:"https://www.youtube.com/watch?v=… or https://youtu.be/…",
              hint:"Any YouTube link (watch, share, Shorts, or embed URL). Video must be Public or Unlisted. Supports the \"watch the full video\" gate." },
-  vimeo:   { label:"Vimeo",            field:"Vimeo link", placeholder:"https://vimeo.com/123456789 or https://vimeo.com/123456789/abcd1234ef (unlisted)",
-             hint:"Paste the video's link from Vimeo (for an unlisted video use the full link including the hash after the ID). Supports the full-watch gate and playback lock; with the lock on, Vimeo's speed menu is removed entirely. In the video's Vimeo settings → Privacy, set <em>Where can this be embedded</em> to your site's domains." },
+  vimeo:   { label:"Vimeo",            field:"Vimeo link or embed code", placeholder:"https://vimeo.com/buffalostampeders/video-name, https://vimeo.com/123456789, or the embed code",
+             hint:"Paste the video's link from Vimeo — custom links like vimeo.com/buffalostampeders/… work and are converted automatically — or paste the embed code from Vimeo's Share → Embed. Supports the full-watch gate and playback lock; with the lock on, Vimeo's speed menu is removed entirely. In the video's Vimeo settings → Privacy, set <em>Where can this be embedded</em> to your site's domains." },
   dropbox: { label:"Dropbox",          field:"Dropbox share link", placeholder:"https://www.dropbox.com/scl/fi/…/video.mp4?rlkey=…&dl=0",
              hint:"Dropbox → Share → Copy link (set to \"Anyone with the link\"). Streams through the course's own player, so the full-watch gate and playback lock both work. No size limit. Use MP4 (H.264); MOV only plays in Safari." },
   gdrivefile:{ label:"Google Drive (locked player)", field:"Google Drive share link", placeholder:"https://drive.google.com/file/d/…/view?usp=sharing",
@@ -471,7 +475,20 @@ function segType(seg){
   return /youtube\.com|youtu\.be/.test(v) ? "youtube" : /boxcast/.test(v) ? "boxcast" : /drive\.google\.com/.test(v) ? "gdrive" : /dropbox/.test(v) ? "dropbox" : /vimeo\.com/.test(v) ? "vimeo" : "file";
 }
 const youtubeId = s => { const m = (s||"").match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/|v\/))([A-Za-z0-9_-]{11})/) || (s||"").match(/^([A-Za-z0-9_-]{11})$/); return m ? m[1] : null; };
-const vimeoRef = s => { const str=(s||"").trim(); let m = str.match(/vimeo\.com\/(?:video\/|manage\/videos\/|channels\/[^/]+\/|groups\/[^/]+\/videos\/)?(\d{6,})(?:\/([a-zA-Z0-9]+))?/) || str.match(/^(\d{6,})(?:\/([a-zA-Z0-9]+))?$/); if (!m) return null; let h = m[2] || null; try { h = h || new URL(str).searchParams.get("h"); } catch(_){} return { id:m[1], h }; };
+// Numeric Vimeo links and embed codes. Custom links (vimeo.com/buffalostampeders/name) have no number in them;
+// those are resolved to the numeric link through Vimeo's oEmbed service when entered (resolveVimeo).
+const vimeoRef = s => { const str=(s||"").trim(); let m = str.match(/vimeo\.com\/(?:video\/|manage\/videos\/|channels\/[^/]+\/|groups\/[^/]+\/videos\/)?(\d{6,})(?:\/([a-zA-Z0-9]{6,}))?/) || str.match(/^(\d{6,})(?:\/([a-zA-Z0-9]+))?$/); if (!m) return null; let h = m[2] || null; if (!h) { const hm = str.match(/[?&](?:amp;)?h=([a-zA-Z0-9]+)/); if (hm) h = hm[1]; } return { id:m[1], h }; };
+const vimeoCanonical = r => `https://vimeo.com/${r.id}${r.h ? "/" + r.h : ""}`;
+const isVimeoCustom = s => /^https?:\/\/(www\.)?vimeo\.com\/[^/\s]+\/[^/\s?#]+/i.test((s||"").trim()) && !vimeoRef(s);
+async function resolveVimeo(url){
+  const r = await fetch("https://vimeo.com/api/oembed.json?url=" + encodeURIComponent(url.trim()));
+  if (!r.ok) throw new Error(r.status === 403 || r.status === 404 ? "private" : "HTTP " + r.status);
+  const d = await r.json();
+  const fromHtml = vimeoRef(d.html || "");
+  const id = String(d.video_id || (fromHtml && fromHtml.id) || "");
+  if (!/^\d{6,}$/.test(id)) throw new Error("no id");
+  return { id, h: fromHtml && fromHtml.id === id ? fromHtml.h : null, title: d.title || "" };
+}
 const dropboxDirect = url => { try { const u = new URL((url||"").trim()); if (/dropboxusercontent\.com$/i.test(u.hostname)) return u.href; if (!/(^|\.)dropbox\.com$/i.test(u.hostname)) return null; u.hostname = "dl.dropboxusercontent.com"; u.searchParams.delete("dl"); u.searchParams.delete("raw"); return u.href; } catch(_) { return null; } };
 const driveId   = s => { const m = (s||"").match(/\/d\/([A-Za-z0-9_-]{20,})/) || (s||"").match(/[?&]id=([A-Za-z0-9_-]{20,})/) || (s||"").match(/^([A-Za-z0-9_-]{20,})$/); return m ? m[1] : null; };
 
@@ -821,6 +838,10 @@ $("trNeeded").addEventListener("click", () => runTranslate("needed"));
 $("trAll").addEventListener("click", () => { if (confirm("Re-translate every line that isn't marked Reviewed? Lines you've edited or reviewed are kept.")) runTranslate("all"); });
 $("captionsOn").addEventListener("change", e => { config.captionsOn = e.target.checked; markDirty(); });
 
+function metaText(seg, st){
+  const lead = st === "text" ? "Text · " : st === "photo" ? `${(seg.images||[]).length} photo${(seg.images||[]).length===1?"":"s"} · ` : (seg.video||"").trim() ? "" : "No video · ";
+  return lead + (seg.noQuiz ? "no quiz" : seg.questions.length + " question" + (seg.questions.length===1?"":"s"));
+}
 function renderModules(){
   ensureIds(config);
   const host = $("modules"); host.innerHTML = "";
@@ -833,7 +854,7 @@ function renderModules(){
       <div class="module-head">
         <span class="num">${i+1}</span>
         <span class="title">${esc(seg.title) || "<em>Untitled module</em>"}</span>
-        <span class="meta">${st==="text"?"Text · ":st==="photo"?`${(seg.images||[]).length} photo${(seg.images||[]).length===1?"":"s"} · `:(seg.video||"").trim()?"":"No video · "}${seg.noQuiz ? "no quiz" : seg.questions.length + " question" + (seg.questions.length===1?"":"s")}</span>
+        <span class="meta">${metaText(seg, st)}</span>
         <button class="btn ghost sm" data-act="up" ${i===0?"disabled":""} title="Move up">&uarr;</button>
         <button class="btn ghost sm" data-act="down" ${i===config.segments.length-1?"disabled":""} title="Move down">&darr;</button>
         <button class="btn ghost sm" data-act="dup" title="Duplicate">Copy</button>
@@ -876,15 +897,16 @@ function renderModules(){
               ? `<textarea data-f="video" rows="3" placeholder="${esc(VIDEO_TYPES[vt].placeholder)}" style="font-family:ui-monospace,Menlo,monospace;font-size:12px">${esc(seg.video)}</textarea>`
               : `<input type="text" data-f="video" value="${esc(seg.video)}" placeholder="${esc(VIDEO_TYPES[vt].placeholder)}">`}
           </div>
-          <div style="flex:0"><button class="btn ghost sm" data-act="preview">Preview video</button></div>
+          <div class="tight"><button class="btn ghost sm" data-act="preview">Preview video</button></div>
         </div>
         <div class="hint video-hint">${VIDEO_TYPES[vt].hint}</div>
         <div class="drive-check hidden" data-drivecheck></div>
+        <div class="drive-check hidden" data-vimeocheck></div>
         <div class="preview hidden"></div>
         <label>Captions <span style="font-weight:400;letter-spacing:0;text-transform:none;color:var(--muted)">(English .vtt or .srt — translated on the Translations tab)</span></label>
         <div class="row" style="align-items:center">
-          <span class="hint" data-capstatus style="flex:3;font-size:13px">${esc(capSummary(seg))}</span>
-          <div style="flex:0;display:flex;gap:6px;min-width:0">
+          <span class="hint" data-capstatus style="flex:1 1 220px;font-size:13px">${esc(capSummary(seg))}</span>
+          <div class="tight btn-group">
             <button class="btn ghost sm" data-act="uploadcap">Upload file</button>
             <button class="btn ghost sm" data-act="editcap">${(seg.captions||"").trim() ? "Edit" : "Paste"}</button>
             ${(seg.captions||"").trim() ? `<button class="btn danger sm" data-act="clearcap">Remove</button>` : ""}
@@ -897,10 +919,10 @@ function renderModules(){
           : `<div class="hint">Where to get them: Vimeo auto-generates English captions on your plan; review them in the video's captions settings, then download the .vtt. YouTube Studio → Subtitles can download a .vtt too, as can most transcription tools.</div>`}
         <label>Placeholder image <span style="font-weight:400;letter-spacing:0;text-transform:none;color:var(--muted)">(optional — shown instead of the player while the video field above is empty)</span></label>
         <div class="row" style="align-items:center">
-          ${seg.placeholderImage ? `<img src="${esc(seg.placeholderImage)}" alt="" style="flex:0;width:120px;height:68px;object-fit:cover;border:1px solid var(--line)">` : ""}
+          ${seg.placeholderImage ? `<img class="tight" src="${esc(seg.placeholderImage)}" alt="" style="width:120px;height:68px;object-fit:cover;border:1px solid var(--line)">` : ""}
           <input type="text" data-f="placeholderImage" value="${esc(seg.placeholderImage||"")}" placeholder="https://…/image.jpg" style="flex:3">
-          <div style="flex:0"><button class="btn ghost sm" data-act="uploadplaceholder">Upload</button><input type="file" accept="image/*" class="hidden" data-phfile></div>
-          <span class="hint" data-phstatus style="flex:0;white-space:nowrap"></span>
+          <div class="tight"><button class="btn ghost sm" data-act="uploadplaceholder">Upload</button><input type="file" accept="image/*" class="hidden" data-phfile></div>
+          <span class="hint tight" data-phstatus style="white-space:nowrap"></span>
         </div>
         </div>
         <div class="${st!=="text"?"":"hidden"}">
@@ -924,6 +946,35 @@ function renderModules(){
     seg.questions.forEach((q, qi) => qHost.appendChild(renderQuestion(i, qi, q)));
     m.querySelectorAll("[data-rich]").forEach(el => richEditor(el, seg[el.dataset.rich] || "", html => { seg[el.dataset.rich] = html; markDirty(); }));
     const imgHost = st === "photo" ? m.querySelector("[data-imglist]") : null; if (imgHost) renderImageList(imgHost, seg);
+    if (st === "video" && vt === "vimeo") {
+      const vin = m.querySelector("[data-f=video]"), box = m.querySelector("[data-vimeocheck]");
+      const show = (cls, html) => { box.className = "drive-check " + cls; box.innerHTML = html; };
+      const run = async () => {
+        const v = (vin.value || "").trim(); seg._vimeoUnresolved = false;
+        if (!v) { box.classList.add("hidden"); return; }
+        const ref = vimeoRef(v);
+        if (ref) {
+          const canon = vimeoCanonical(ref);
+          if (canon !== v) { seg.video = canon; vin.value = canon; markDirty(); show("ok", `Converted to <strong>${esc(canon)}</strong>${ref.h ? " (includes the private hash)" : ""}.`); }
+          else box.classList.add("hidden");
+          return;
+        }
+        if (!isVimeoCustom(v)) { show("bad", "That doesn't look like a Vimeo link."); return; }
+        show("", "Looking up this Vimeo link…");
+        try {
+          const r = await resolveVimeo(v);
+          const canon = vimeoCanonical(r); seg.video = canon; vin.value = canon; markDirty(); m.querySelector(".module-head .meta").textContent = metaText(seg, st);
+          show("ok", `Found <strong>${esc(r.title || "video")}</strong> → ${esc(canon)}`);
+        } catch (err) {
+          seg._vimeoUnresolved = true;
+          show("bad", err.message === "private"
+            ? "Vimeo won't share this video's details here because of its privacy settings. In Vimeo, open the video → Share → Embed, copy the embed code, and paste it into the field above instead."
+            : "Couldn't look up this link. Paste the embed code from Vimeo's Share → Embed instead.");
+        }
+      };
+      vin.addEventListener("change", run);
+      if (isVimeoCustom(vin.value)) run();
+    }
     const capFile = m.querySelector("[data-capfile]"), capText = m.querySelector("[data-captext]"), capStatus = m.querySelector("[data-capstatus]");
     if (capFile) capFile.addEventListener("change", async e => {
       const f = e.target.files[0]; e.target.value = ""; if (!f) return;
@@ -968,6 +1019,7 @@ function renderModules(){
       inp.addEventListener(ev, () => {
         seg[f] = inp.type === "checkbox" ? inp.checked : inp.value;
         if (f === "title") m.querySelector(".module-head .title").textContent = inp.value || "Untitled module";
+        if (f === "video") m.querySelector(".module-head .meta").textContent = metaText(seg, st);
         markDirty();
         if (f === "videoType" || f === "notesCollapsed" || f === "noQuiz" || f === "type") renderModules();   // swap field/hints
       });

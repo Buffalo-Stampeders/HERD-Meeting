@@ -405,11 +405,11 @@ function detectType(seg){
 // player.vimeo.com/video/ID?h=HASH, vimeo.com/manage/videos/ID, or a bare ID.
 function vimeoRef(input){
   const str = (input||"").trim();
-  let m = str.match(/vimeo\.com\/(?:video\/|manage\/videos\/|channels\/[^/]+\/|groups\/[^/]+\/videos\/)?(\d{6,})(?:\/([a-zA-Z0-9]+))?/);
+  let m = str.match(/vimeo\.com\/(?:video\/|manage\/videos\/|channels\/[^/]+\/|groups\/[^/]+\/videos\/)?(\d{6,})(?:\/([a-zA-Z0-9]{6,}))?/);
   if (!m) m = str.match(/^(\d{6,})(?:\/([a-zA-Z0-9]+))?$/);
   if (!m) return null;
   let h = m[2] || null;
-  try { h = h || new URL(str).searchParams.get("h"); } catch(_){}
+  if (!h) { const hm = str.match(/[?&](?:amp;)?h=([a-zA-Z0-9]+)/); if (hm) h = hm[1]; }
   return { id: m[1], h };
 }
 // Turn a Dropbox share link into a direct stream URL (dl.dropboxusercontent.com serves the raw file).
