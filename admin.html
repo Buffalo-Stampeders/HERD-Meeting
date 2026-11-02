@@ -78,6 +78,15 @@
   .stat .l{font-size:11px;font-weight:700;color:var(--bronze);text-transform:uppercase;letter-spacing:2px;margin-top:4px}
   .hidden{display:none !important}
   .empty{color:var(--muted);text-align:center;padding:30px}
+  .rev-summary{display:flex;gap:24px;align-items:center;flex-wrap:wrap;margin-top:12px}
+  .rev-avg .n{font-family:var(--font-head);font-weight:800;font-size:40px;color:var(--green);line-height:1}
+  .rev-avg .l{font-size:11px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--bronze);margin-top:4px}
+  .rev-bars{flex:1;min-width:240px;max-width:460px}
+  .rev-bar{display:grid;grid-template-columns:16px 1fr 44px;gap:8px;align-items:center;font-size:12px;font-weight:600;margin:3px 0}
+  .rev-bar .track{height:12px;background:var(--cream);position:relative}
+  .rev-bar .fill{position:absolute;inset:0 auto 0 0;background:var(--green)}
+  .rating-pill{display:inline-block;min-width:26px;text-align:center;font-weight:800;color:#fff;background:var(--green);padding:1px 6px}
+  td.comment{white-space:pre-wrap;max-width:420px}
   .langgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:0 16px;margin-top:6px}
   .tr-group{margin:20px 0 4px;font-size:16px;border-bottom:2px solid var(--line);padding-bottom:4px}
   .tr-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.35fr);gap:16px;padding:10px 0;border-bottom:1px dashed var(--line)}
@@ -193,10 +202,15 @@
         <div><label>Completion heading</label><input type="text" id="doneTitle"></div>
         <div style="flex:2"><label>Completion message</label><input type="text" id="doneNote"></div>
       </div>
+      <div class="row" id="reviewTextRow">
+        <div><label>Rating heading</label><input type="text" id="reviewTitle" placeholder="How was this meeting?"></div>
+        <div style="flex:2"><label>Rating instructions</label><input type="text" id="reviewPrompt" placeholder="Rate it from 1 (poor) to 5 (excellent). Comments are optional."></div>
+      </div>
       <div class="row" style="margin-top:8px">
         <div class="check"><input type="checkbox" id="requireFullWatch"><span>Learner must watch the whole video before questions unlock</span></div>
         <div class="check"><input type="checkbox" id="requireAllCorrect"><span>All answers must be correct to advance (otherwise retry)</span></div>
         <div class="check"><input type="checkbox" id="revealCorrect"><span>Show the correct answer after a wrong attempt</span></div>
+        <div class="check"><input type="checkbox" id="reviewEnabled"><span>Ask for a rating at the end <span class="hint" style="display:block">A required 1–5 rating and an optional comment box after the last section. Saved to the Reviews sheet.</span></span></div>
         <div class="check"><input type="checkbox" id="lockPlayback"><span>Lock playback — no speed changes, no skipping ahead <span class="hint" style="display:block">Applies to MP4 files, YouTube, Vimeo, Dropbox, and Google Drive (locked player). Drive-player embeds and BoxCast can't be controlled.</span></span></div>
       </div>
     </div>
@@ -238,6 +252,21 @@
   <!-- ============ SUBMISSIONS ============ -->
   <section id="tab-submissions" class="hidden">
     <div class="stats" id="stats"></div>
+    <div class="card" id="reviewsCard">
+      <div class="toolbar">
+        <h2>Reviews</h2><span class="spacer"></span>
+        <select id="revFilter" style="max-width:200px">
+          <option value="all">All reviews</option><option value="comments">With comments</option>
+          <option value="5">5 only</option><option value="4">4 only</option><option value="3">3 only</option><option value="2">2 only</option><option value="1">1 only</option>
+        </select>
+        <button class="btn sm" id="revCsvBtn">Download CSV</button>
+      </div>
+      <div class="rev-summary" id="revSummary"></div>
+      <div class="tablewrap" style="margin-top:12px;max-height:45vh">
+        <table id="revTable"><thead><tr><th>Submitted</th><th>Name</th><th>Email</th><th>Lang</th><th>Rating</th><th>Comment</th></tr></thead><tbody></tbody></table>
+      </div>
+      <div class="empty hidden" id="noRevs">No reviews yet.</div>
+    </div>
     <div class="card">
       <div class="toolbar">
         <h2>Submissions</h2><span class="spacer"></span>
@@ -450,6 +479,9 @@ function render(){
   $("requireAllCorrect").checked = !!config.requireAllCorrect;
   $("revealCorrect").checked = !!config.revealCorrect;
   $("lockPlayback").checked = config.lockPlayback !== false;
+  $("reviewEnabled").checked = config.reviewEnabled !== false;
+  $("reviewTitle").value = config.reviewTitle || ""; $("reviewPrompt").value = config.reviewPrompt || "";
+  $("reviewTextRow").classList.toggle("hidden", config.reviewEnabled === false);
   renderModules();
 }
 
@@ -644,7 +676,10 @@ const UI = {
   correct:"Correct — {score}.", tryAgain:"{score} correct. Review the video and try again.",
   showNotes:"Show notes", hideNotes:"Hide notes", comingSoon:"Video coming soon", unavailable:"Video unavailable",
   unavailableBody:"This video could not be loaded.", preview:"PREVIEW — submissions not logged", captions:"Captions", fullscreen:"Full screen",
-  noSkip:"Skipping ahead isn't allowed — please keep watching."
+  noSkip:"Skipping ahead isn't allowed — please keep watching.",
+  reviewEyebrow:"One last step", ratingLegend:"Rating from 1 to 5", ratingLow:"Poor", ratingHigh:"Excellent",
+  commentsLabel:"Comments", optional:"(optional)", submitReview:"Submit review", ratingRequired:"Please choose a rating from 1 to 5.",
+  sendingReview:"Sending…"
 };
 const LANG_NAMES = { en:"English", es:"Español", ht:"Kreyòl ayisyen", pt:"Português", fr:"Français", vi:"Tiếng Việt", "zh-CN":"中文（简体）",
   "zh-TW":"中文（繁體）", tl:"Tagalog", ar:"العربية", ru:"Русский", ko:"한국어", de:"Deutsch", it:"Italiano", ja:"日本語", pl:"Polski", uk:"Українська", hi:"हिन्दी" };
@@ -695,6 +730,10 @@ function collectStrings(cfg){
   };
   add("c:courseTitle", "Course title", cfg.courseTitle); add("c:intro", "Intro text", cfg.intro);
   add("c:doneTitle", "Completion heading", cfg.doneTitle); add("c:doneNote", "Completion message", cfg.doneNote);
+  if (cfg.reviewEnabled !== false) {
+    add("c:reviewTitle", "Rating heading", cfg.reviewTitle || "How was this meeting?");
+    add("c:reviewPrompt", "Rating instructions", cfg.reviewPrompt || "Rate it from 1 (poor) to 5 (excellent). Comments are optional.");
+  }
   cfg.segments.forEach((s, i) => {
     const g = `Section ${i + 1}` + (s.title ? ` — ${s.title}` : "");
     add(`s:${s.id}:title`, "Title", s.title, "text", g);
@@ -1089,6 +1128,8 @@ function renderQuestion(mi, qi, q){
 /* course-level fields */
 [["courseTitle","courseTitle"],["intro","intro"],["doneTitle","doneTitle"],["doneNote","doneNote"]].forEach(([id,k]) =>
   $(id).addEventListener("input", e => { config[k] = e.target.value; markDirty(); }));
+$("reviewEnabled").addEventListener("change", e => { config.reviewEnabled = e.target.checked; $("reviewTextRow").classList.toggle("hidden", !e.target.checked); markDirty(); });
+["reviewTitle","reviewPrompt"].forEach(k => $(k).addEventListener("input", e => { config[k] = e.target.value; markDirty(); }));
 ["requireFullWatch","requireAllCorrect","revealCorrect","lockPlayback"].forEach(k =>
   $(k).addEventListener("change", e => { config[k] = e.target.checked; markDirty(); }));
 
@@ -1128,6 +1169,7 @@ async function loadSubmissions(){
     if (!r.ok) { setMsg("Could not load submissions: " + r.error, "bad"); return; }
     subs = r; renderSubs();
   } catch(err) { setMsg("Could not load submissions — backend unreachable.", "bad"); }
+  loadReviews();
 }
 function subObjects(){ return subs.rows.map(r => Object.fromEntries(subs.columns.map((c,i)=>[c, r[i]]))); }
 function filteredSubs(){
@@ -1166,6 +1208,40 @@ $("csvBtn").addEventListener("click", () => {
   const cols = subs.columns;
   const csv = [cols.join(",")].concat(rows.map(r => cols.map(c => `"${String(r[c] ?? "").replace(/"/g,'""')}"`).join(","))).join("\r\n");
   download(`submissions-${new Date().toISOString().slice(0,10)}.csv`, csv, "text/csv");
+});
+
+/* ---------------- reviews ---------------- */
+let revs = { columns: [], rows: [] };
+async function loadReviews(){
+  try {
+    const r = await api({ action:"reviews", key: conn.key });
+    if (!r.ok) { $("revSummary").innerHTML = `<span class="hint">Reviews unavailable: ${esc(r.error || "update the Apps Script backend")}</span>`; return; }
+    revs = r; renderReviews();
+  } catch (err) { $("revSummary").innerHTML = `<span class="hint">Couldn't load reviews.</span>`; }
+}
+const revObjects = () => revs.rows.map(r => Object.fromEntries(revs.columns.map((c, i) => [c, r[i]])));
+function filteredReviews(){
+  const f = $("revFilter").value;
+  return revObjects().filter(r => f === "all" ? true : f === "comments" ? String(r.comment || "").trim() : Number(r.rating) === Number(f)).reverse();
+}
+function renderReviews(){
+  const all = revObjects(), rows = filteredReviews();
+  const n = all.length, sum = all.reduce((a, r) => a + (Number(r.rating) || 0), 0);
+  const dist = [5,4,3,2,1].map(k => [k, all.filter(r => Number(r.rating) === k).length]);
+  $("revSummary").innerHTML = n ? `
+    <div class="rev-avg"><div class="n">${(sum / n).toFixed(1)}</div><div class="l">Average of ${n} review${n === 1 ? "" : "s"}</div></div>
+    <div class="rev-bars">${dist.map(([k, c]) => `<div class="rev-bar"><span>${k}</span><div class="track"><div class="fill" style="width:${n ? (100 * c / n).toFixed(1) : 0}%"></div></div><span>${c} · ${n ? Math.round(100 * c / n) : 0}%</span></div>`).join("")}</div>` : "";
+  $("revTable").querySelector("tbody").innerHTML = rows.map(r => `<tr>
+    <td>${esc(r.submittedAt ? new Date(r.submittedAt).toLocaleString() : r.submittedAtLocal)}</td><td>${esc(r.name)}</td><td>${esc(r.email)}</td><td>${esc(r.language)}</td>
+    <td><span class="rating-pill">${esc(r.rating)}</span></td><td class="comment">${esc(r.comment)}</td></tr>`).join("");
+  $("noRevs").classList.toggle("hidden", rows.length > 0);
+}
+$("revFilter").addEventListener("change", renderReviews);
+$("revCsvBtn").addEventListener("click", () => {
+  const rows = filteredReviews(); if (!rows.length) return;
+  const cols = revs.columns;
+  const cell = v => { let t = String(v ?? ""); if (/^[=+\-@]/.test(t)) t = "'" + t; return `"${t.replace(/"/g, '""')}"`; };
+  download(`reviews-${new Date().toISOString().slice(0,10)}.csv`, [cols.join(",")].concat(rows.map(r => cols.map(c => cell(r[c])).join(","))).join("\r\n"), "text/csv");
 });
 
 /* ---------------- init ---------------- */

@@ -97,6 +97,19 @@
   .done-card h2{color:#fff} .done-card .note{color:var(--tan)}
   .done-card .big{font-size:56px;color:var(--tan);font-family:var(--font-head);font-weight:800;line-height:1}
   .hidden{display:none !important}
+  .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  .rating{border:0;padding:0;margin:18px 0 4px;max-width:440px}
+  .rating-row{display:flex;gap:8px}
+  .rating-row label{flex:1;margin:0;cursor:pointer;letter-spacing:0;text-transform:none}
+  .rating-row input{position:absolute;opacity:0;pointer-events:none}
+  .rating-row span{display:flex;align-items:center;justify-content:center;height:52px;border:2px solid var(--bronze);background:#fff;color:var(--green);font-family:var(--font-head);font-weight:800;font-size:22px;transition:background .12s,color .12s}
+  .rating-row label:hover span{background:var(--cream-light)}
+  .rating-row input:checked + span{background:var(--green);border-color:var(--green);color:#fff}
+  .rating-row input:focus-visible + span{outline:3px solid var(--tan);outline-offset:2px}
+  .rating.invalid .rating-row span{border-color:var(--bad)}
+  .rating-ends{display:flex;justify-content:space-between;font-size:12px;font-weight:600;color:var(--muted);margin-top:6px}
+  #reviewCard textarea{width:100%;font:inherit;padding:11px 13px;border:1px solid var(--bronze);border-radius:3px;background:#fff;resize:vertical}
+  #reviewCard .optional{font-weight:400;letter-spacing:0;text-transform:none;color:var(--muted)}
   .header-right{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
   .lang-wrap{display:flex;align-items:center;gap:6px;margin:0;font-size:16px;letter-spacing:0;text-transform:none}
   .lang-pick{font:inherit;font-size:13px;font-weight:600;color:var(--green);border:1px solid var(--bronze);background:#fff;padding:5px 8px;border-radius:3px;cursor:pointer}
@@ -176,6 +189,31 @@
     <button type="button" class="lb-nav next" id="lbNext" aria-label="Next">&#8250;</button>
     <div class="lb-count" id="lbCount"></div>
   </div>
+
+  <!-- Review: required 1–5 rating + optional comments -->
+  <section class="card hidden" id="reviewCard">
+    <div class="eyebrow" data-ui="reviewEyebrow">One last step</div>
+    <h2 id="reviewTitle"></h2>
+    <p class="note" id="reviewPrompt"></p>
+    <form id="reviewForm" novalidate>
+      <fieldset class="rating" id="ratingSet" aria-required="true">
+        <legend class="sr-only" data-ui="ratingLegend">Rating from 1 to 5</legend>
+        <div class="rating-row">
+          <label><input type="radio" name="rating" value="1"><span>1</span></label>
+          <label><input type="radio" name="rating" value="2"><span>2</span></label>
+          <label><input type="radio" name="rating" value="3"><span>3</span></label>
+          <label><input type="radio" name="rating" value="4"><span>4</span></label>
+          <label><input type="radio" name="rating" value="5"><span>5</span></label>
+        </div>
+        <div class="rating-ends"><span data-ui="ratingLow">Poor</span><span data-ui="ratingHigh">Excellent</span></div>
+      </fieldset>
+      <div class="feedback bad" id="ratingErr" role="alert"></div>
+      <label for="reviewComment"><span data-ui="commentsLabel">Comments</span> <span class="optional" data-ui="optional">(optional)</span></label>
+      <textarea id="reviewComment" rows="4" maxlength="2000"></textarea>
+      <button class="btn" type="submit" data-ui="submitReview">Submit review</button>
+      <div class="status" id="reviewStatus"></div>
+    </form>
+  </section>
 
   <!-- Done -->
   <section class="card done-card hidden" id="doneCard">
@@ -262,7 +300,10 @@ const UI = {
   correct:"Correct — {score}.", tryAgain:"{score} correct. Review the video and try again.",
   showNotes:"Show notes", hideNotes:"Hide notes", comingSoon:"Video coming soon", unavailable:"Video unavailable",
   unavailableBody:"This video could not be loaded.", preview:"PREVIEW — submissions not logged", captions:"Captions", fullscreen:"Full screen",
-  noSkip:"Skipping ahead isn't allowed — please keep watching."
+  noSkip:"Skipping ahead isn't allowed — please keep watching.",
+  reviewEyebrow:"One last step", ratingLegend:"Rating from 1 to 5", ratingLow:"Poor", ratingHigh:"Excellent",
+  commentsLabel:"Comments", optional:"(optional)", submitReview:"Submit review", ratingRequired:"Please choose a rating from 1 to 5.",
+  sendingReview:"Sending…"
 };
 const LANG_NAMES = { en:"English", es:"Español", ht:"Kreyòl ayisyen", pt:"Português", fr:"Français", vi:"Tiếng Việt", "zh-CN":"中文（简体）",
   "zh-TW":"中文（繁體）", tl:"Tagalog", ar:"العربية", ru:"Русский", ko:"한국어", de:"Deutsch", it:"Italiano", ja:"日本語", pl:"Polski", uk:"Українська", hi:"हिन्दी" };
@@ -305,6 +346,7 @@ $("langPick").addEventListener("change", e => {
   LANG = e.target.value; try { localStorage.setItem("courseLang", LANG); } catch(_){}
   applyLangAttrs(); applyStatic();
   if (!$("segmentCard").classList.contains("hidden")) localizeSegment(true);
+  if (!$("reviewCard").classList.contains("hidden")) localizeReview();
 });
 
 function renderProgress(){
@@ -848,6 +890,7 @@ $("quizForm").addEventListener("submit", async e => {
     $("status").innerHTML = noQuiz ? "" : `<span class="feedback ok">${esc(ui("correct", { score: `${correct}/${total}` }))}</span>`;
     setTimeout(() => {
       if (state.idx + 1 < CONFIG.segments.length) showSegment(state.idx + 1);
+      else if (CONFIG.reviewEnabled !== false) showReview();
       else finish();
     }, noQuiz ? 150 : 900);
   } else {
@@ -855,9 +898,39 @@ $("quizForm").addEventListener("submit", async e => {
   }
 });
 
+function showReview(){
+  state.idx = CONFIG.segments.length; renderProgress(); destroyPlayers();
+  $("segmentCard").classList.add("hidden"); $("reviewCard").classList.remove("hidden");
+  localizeReview();
+  window.scrollTo({top:0, behavior:"smooth"});
+}
+function localizeReview(){
+  $("reviewTitle").textContent = tr("c:reviewTitle", CONFIG.reviewTitle || "How was this meeting?");
+  $("reviewPrompt").textContent = tr("c:reviewPrompt", CONFIG.reviewPrompt || "Rate it from 1 (poor) to 5 (excellent). Comments are optional.");
+  if ($("ratingErr").textContent) $("ratingErr").textContent = ui("ratingRequired");
+}
+$("reviewForm").addEventListener("change", e => {
+  if (e.target.name === "rating") { $("ratingSet").classList.remove("invalid"); $("ratingErr").textContent = ""; }
+});
+$("reviewForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const picked = $("reviewForm").querySelector("input[name=rating]:checked");
+  if (!picked) {
+    $("ratingSet").classList.add("invalid"); $("ratingErr").textContent = ui("ratingRequired");
+    $("reviewForm").querySelector("input[name=rating]").focus();
+    return;
+  }
+  const btn = $("reviewForm").querySelector("button"); btn.disabled = true; $("reviewStatus").textContent = ui("sendingReview");
+  const now = new Date();
+  await logSubmission({ type: "review", name: state.name, email: state.email, submittedAt: now.toISOString(), submittedAtLocal: now.toLocaleString(),
+    course: CONFIG.courseTitle, rating: Number(picked.value), comment: $("reviewComment").value.trim(), language: LANG });
+  $("reviewCard").classList.add("hidden");
+  finish();
+});
+
 function finish(){
   state.idx = CONFIG.segments.length; renderProgress();
-  $("segmentCard").classList.add("hidden"); $("doneCard").classList.remove("hidden");
+  $("segmentCard").classList.add("hidden"); $("reviewCard").classList.add("hidden"); $("doneCard").classList.remove("hidden");
   $("doneTitle").textContent = tr("c:doneTitle", CONFIG.doneTitle); $("doneNote").textContent = tr("c:doneNote", CONFIG.doneNote);
   // Tell a parent page (e.g. Squarespace) that the course finished, if embedded in an iframe.
   try { window.parent.postMessage({ type:"course-complete", name:state.name, email:state.email }, "*"); } catch(_){}

@@ -17,6 +17,7 @@
  * (The URL stays the same; without a new version the live app keeps the old code.)
  *
  * Sheets created automatically:  "Submissions" (one row per quiz attempt)
+ *                                 "Reviews"     (one row per end-of-course rating + comment)
  *                                 "Config"      (course JSON, split across A2, A3, … to stay under
  *                                                Google Sheets' 50,000-character cell limit)
  *
@@ -32,6 +33,8 @@ const COLUMNS = [
   "segment", "segmentTitle", "attempt", "score", "passed",
   "answers", "secondsOnSegment", "completedCourse", "language"
 ];
+const REVIEW_SHEET = "Reviews";
+const REVIEW_COLUMNS = ["submittedAt", "submittedAtLocal", "name", "email", "course", "rating", "comment", "language"];
 const CHUNK = 45000;   // characters per Config cell
 
 function json(obj) {
@@ -66,6 +69,12 @@ function doGet(e) {
     const s = sheet(SUB_SHEET);
     const rows = s.getLastRow() > 1 ? s.getRange(2, 1, s.getLastRow() - 1, COLUMNS.length).getValues() : [];
     return json({ ok: true, columns: COLUMNS, rows: rows });
+  }
+  if (p.action === "reviews") {
+    if (!isAdmin(p.key)) return json({ ok: false, error: "Unauthorized" });
+    const s = sheet(REVIEW_SHEET);
+    const rows = s.getLastRow() > 1 ? s.getRange(2, 1, s.getLastRow() - 1, REVIEW_COLUMNS.length).getValues() : [];
+    return json({ ok: true, columns: REVIEW_COLUMNS, rows: rows });
   }
   return ContentService.createTextOutput("Course backend is running.");
 }
@@ -128,6 +137,18 @@ function doPost(e) {
       const file = folder.createFile(blob);
       file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
       return json({ ok: true, id: file.getId(), url: "https://lh3.googleusercontent.com/d/" + file.getId(), name: file.getName() });
+    }
+
+    // End-of-course review: rating 1–5 required, comment optional
+    if (data.type === "review") {
+      const rating = Number(data.rating);
+      if (!(rating >= 1 && rating <= 5 && Math.round(rating) === rating)) return json({ ok: false, error: "Rating must be 1–5" });
+      const r = sheet(REVIEW_SHEET);
+      if (r.getLastRow() === 0) { r.appendRow(REVIEW_COLUMNS); r.getRange(1, 1, 1, REVIEW_COLUMNS.length).setFontWeight("bold"); r.setFrozenRows(1); }
+      const row = Object.assign({}, data, { rating: rating, comment: String(data.comment || "").slice(0, 2000) });
+      // Prefix values that a spreadsheet would treat as formulas, so a comment can't run as one.
+      r.appendRow(REVIEW_COLUMNS.map(k => { const v = (k in row) ? row[k] : ""; return (typeof v === "string" && /^[=+\-@]/.test(v)) ? "'" + v : v; }));
+      return json({ ok: true });
     }
 
     // Default: log a quiz submission

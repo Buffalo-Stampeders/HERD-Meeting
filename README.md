@@ -11,6 +11,10 @@ Gated video training: learners enter name + email, watch each video segment, and
 
 A section is a **video module**, a **photo module** (one image or a slideshow — learners click to enlarge), or a **text-only section** (a header plus rich text). Any kind can carry quiz questions or be set to "No questions" so the learner just clicks Continue. A video module may be published without a video; a placeholder image (or a branded "coming soon" card) shows until one is added.
 
+## End-of-course review
+
+After the last section, learners rate the meeting 1–5 (required) and can leave a comment (optional). Reviews are saved to a separate **Reviews** sheet and summarized on the dashboard's Submissions tab (average, distribution, comments, CSV). Turn it off or change the wording in the dashboard's Course settings.
+
 ## Languages and captions
 
 Learners choose a language from a menu on the course; the choice is remembered and logged with each submission. English is the source language.
