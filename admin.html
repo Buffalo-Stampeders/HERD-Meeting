@@ -87,6 +87,8 @@
   .rev-bar .fill{position:absolute;inset:0 auto 0 0;background:var(--green)}
   .rating-pill{display:inline-block;min-width:26px;text-align:center;font-weight:800;color:#fff;background:var(--green);padding:1px 6px}
   td.comment{white-space:pre-wrap;max-width:420px}
+  .backend-warn{background:#fdecea;color:var(--bad);border-top:3px solid var(--bad);padding:10px 20px;font-size:14px;font-weight:600}
+  .backend-warn code{background:#fff;padding:1px 5px;font-weight:400}
   .langgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:0 16px;margin-top:6px}
   .tr-group{margin:20px 0 4px;font-size:16px;border-bottom:2px solid var(--line);padding-bottom:4px}
   .tr-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.35fr);gap:16px;padding:10px 0;border-bottom:1px dashed var(--line)}
@@ -167,6 +169,7 @@
   <button class="btn logout" id="logoutBtn">Sign out</button>
 </div>
 
+<div class="backend-warn hidden" id="backendWarn"></div>
 <div class="wrap">
 
   <!-- ============ CONNECTION ============ -->
@@ -347,8 +350,19 @@ async function verify(endpoint, key){
 }
 
 /* ---- login gate ---- */
+const REQUIRED_BACKEND = 5;
+async function checkBackend(){
+  let v = 0;
+  try { const r = await fetch(conn.endpoint + "?action=version&t=" + Date.now()); const t = await r.text(); try { v = JSON.parse(t).version || 0; } catch (_) { v = 0; } }
+  catch (_) { return; }   // unreachable: the normal error messages cover this
+  const box = $("backendWarn");
+  if (v >= REQUIRED_BACKEND) { box.classList.add("hidden"); return; }
+  box.innerHTML = `Your Google Apps Script backend is out of date, so <u>translation, image uploads, Drive checks and reviews won't work</u>. In the Apps Script editor, paste the latest <code>apps-script.gs</code> (keep your ADMIN_KEY line), then Deploy → Manage deployments → ✎ → Version: <strong>New version</strong> → Deploy. Reload this page afterwards.`;
+  box.classList.remove("hidden");
+}
 async function unlock(){
   document.body.classList.remove("locked");
+  checkBackend();
   $("endpoint").value = conn.endpoint; $("adminKey").value = conn.key;
   await loadConfig();
   const draft = localStorage.getItem("courseAdminDraft");
@@ -767,6 +781,7 @@ async function translateItems(lang, items, onProgress){
     const chunk = reqs.slice(i, i + 60);
     const r = await api({}, { action:"translate", key: conn.key, source:"en", target: lang, items: chunk });
     if (!r.ok) throw new Error(r.error || "Translation failed");
+    if (!r.results) { checkBackend(); throw new Error("the Apps Script backend didn't return any translations — it needs updating (see the red notice)"); }
     Object.assign(results, r.results); done += chunk.length; onProgress && onProgress(done, reqs.length);
   }
   const tx = config.translations[lang] = config.translations[lang] || {};

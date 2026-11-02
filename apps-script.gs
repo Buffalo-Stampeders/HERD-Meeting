@@ -25,6 +25,7 @@
  */
 
 const ADMIN_KEY = "change-me-to-a-long-secret";   // <-- change this
+const BACKEND_VERSION = 5;   // admin.html warns when the deployed script is older than it expects
 
 const SUB_SHEET = "Submissions";
 const CFG_SHEET = "Config";
@@ -70,6 +71,7 @@ function doGet(e) {
     const rows = s.getLastRow() > 1 ? s.getRange(2, 1, s.getLastRow() - 1, COLUMNS.length).getValues() : [];
     return json({ ok: true, columns: COLUMNS, rows: rows });
   }
+  if (p.action === "version") return json({ ok: true, version: BACKEND_VERSION });
   if (p.action === "reviews") {
     if (!isAdmin(p.key)) return json({ ok: false, error: "Unauthorized" });
     const s = sheet(REVIEW_SHEET);
