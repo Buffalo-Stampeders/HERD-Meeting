@@ -110,6 +110,9 @@
   .rating-ends{display:flex;justify-content:space-between;font-size:12px;font-weight:600;color:var(--muted);margin-top:6px}
   #reviewCard textarea{width:100%;font:inherit;padding:11px 13px;border:1px solid var(--bronze);border-radius:3px;background:#fff;resize:vertical}
   #reviewCard .optional{font-weight:400;letter-spacing:0;text-transform:none;color:var(--muted)}
+  .same-as{display:flex;align-items:center;gap:8px;margin:6px 0 2px}
+  .same-as input{accent-color:var(--green);width:16px;height:16px;margin:0}
+  .same-as label{margin:0;font-size:13px;font-weight:500;letter-spacing:0;text-transform:none;color:var(--ink);cursor:pointer}
   .header-right{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
   .lang-wrap{display:flex;align-items:center;gap:6px;margin:0;font-size:16px;letter-spacing:0;text-transform:none}
   .lang-pick{font:inherit;font-size:13px;font-weight:600;color:var(--green);border:1px solid var(--bronze);background:#fff;padding:5px 8px;border-radius:3px;cursor:pointer}
@@ -145,10 +148,15 @@
     <h2 data-ui="beforeBegin">Before you begin</h2>
     <p class="note" id="courseIntro"></p>
     <form id="startForm" autocomplete="on">
-      <label for="name" data-ui="fullName">Full name</label>
-      <input type="text" id="name" required placeholder="First and last name" data-ui-ph="namePh">
-      <label for="email" data-ui="email">Email address</label>
-      <input type="email" id="email" required placeholder="you@example.com">
+      <label for="name" data-ui="parentName">Parent/Guardian Name</label>
+      <input type="text" id="name" required autocomplete="name" placeholder="First and last name" data-ui-ph="namePh">
+      <label for="email" data-ui="parentEmail">Parent/Guardian Email</label>
+      <input type="email" id="email" required autocomplete="email" placeholder="you@example.com">
+      <label for="qualifying" data-ui="qualifyingName">Qualifying Parent/Guardian Name</label>
+      <input type="text" id="qualifying" required autocomplete="off" placeholder="First and last name" data-ui-ph="namePh">
+      <div class="same-as"><input type="checkbox" id="sameAsParent"><label for="sameAsParent" data-ui="sameAsParent">Same as the parent/guardian above</label></div>
+      <label for="student" data-ui="studentName">Student Name</label>
+      <input type="text" id="student" required autocomplete="off" placeholder="Student's first and last name" data-ui-ph="studentPh">
       <button class="btn" type="submit" data-ui="start">Start course</button>
     </form>
   </section>
@@ -292,6 +300,8 @@ const state = { name:"", email:"", idx:0, attempts:0, watched:false, startedAt:n
    Keep UI in sync with the copy in admin.html. */
 const UI = {
   signIn:"Sign in", beforeBegin:"Before you begin", fullName:"Full name", namePh:"First and last name",
+  parentName:"Parent/Guardian Name", parentEmail:"Parent/Guardian Email", qualifyingName:"Qualifying Parent/Guardian Name",
+  studentName:"Student Name", sameAsParent:"Same as the parent/guardian above", studentPh:"Student's first and last name",
   email:"Email address", start:"Start course", loading:"Loading course…", sectionOf:"Section {n} of {total}",
   watchToUnlock:"Watch the full video to unlock the questions below.", watchToContinue:"Watch the full video to continue.",
   answerBelow:"Answer the questions below to continue.", videoDoneAnswer:"Video complete — answer the questions below.",
@@ -839,10 +849,18 @@ function linkify(text){
   return esc(text).replace(/(https?:\/\/[^\s<]+)/g, u => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
 }
 
+// "Same as the parent/guardian above" keeps the qualifying name in sync while ticked.
+$("sameAsParent").addEventListener("change", e => {
+  const q = $("qualifying");
+  if (e.target.checked) { q.value = $("name").value; q.readOnly = true; } else { q.readOnly = false; q.focus(); }
+});
+$("name").addEventListener("input", () => { if ($("sameAsParent").checked) $("qualifying").value = $("name").value; });
 $("startForm").addEventListener("submit", e => {
   e.preventDefault();
   state.name = $("name").value.trim(); state.email = $("email").value.trim();
-  $("who").textContent = `${state.name} · ${state.email}`;
+  state.qualifying = $("qualifying").value.trim(); state.student = $("student").value.trim();
+  if (!state.name || !state.email || !state.qualifying || !state.student) return;
+  $("who").textContent = `${state.student} · ${state.name}`;
   showSegment(0);
 });
 
@@ -869,7 +887,7 @@ $("quizForm").addEventListener("submit", async e => {
   });
 
   const entry = {
-    name: state.name, email: state.email,
+    name: state.name, email: state.email, qualifyingParent: state.qualifying, studentName: state.student,
     submittedAt: new Date().toISOString(),
     submittedAtLocal: new Date().toLocaleString(),
     course: CONFIG.courseTitle,
@@ -922,7 +940,7 @@ $("reviewForm").addEventListener("submit", async e => {
   }
   const btn = $("reviewForm").querySelector("button"); btn.disabled = true; $("reviewStatus").textContent = ui("sendingReview");
   const now = new Date();
-  await logSubmission({ type: "review", name: state.name, email: state.email, submittedAt: now.toISOString(), submittedAtLocal: now.toLocaleString(),
+  await logSubmission({ type: "review", name: state.name, email: state.email, qualifyingParent: state.qualifying, studentName: state.student, submittedAt: now.toISOString(), submittedAtLocal: now.toLocaleString(),
     course: CONFIG.courseTitle, rating: Number(picked.value), comment: $("reviewComment").value.trim(), language: LANG });
   $("reviewCard").classList.add("hidden");
   finish();

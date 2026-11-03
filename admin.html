@@ -266,14 +266,14 @@
       </div>
       <div class="rev-summary" id="revSummary"></div>
       <div class="tablewrap" style="margin-top:12px;max-height:45vh">
-        <table id="revTable"><thead><tr><th>Submitted</th><th>Name</th><th>Email</th><th>Lang</th><th>Rating</th><th>Comment</th></tr></thead><tbody></tbody></table>
+        <table id="revTable"><thead><tr><th>Submitted</th><th>Student</th><th>Parent/Guardian</th><th>Email</th><th>Lang</th><th>Rating</th><th>Comment</th></tr></thead><tbody></tbody></table>
       </div>
       <div class="empty hidden" id="noRevs">No reviews yet.</div>
     </div>
     <div class="card">
       <div class="toolbar">
         <h2>Submissions</h2><span class="spacer"></span>
-        <input type="text" id="subSearch" placeholder="Filter by name, email, module…" style="max-width:260px">
+        <input type="text" id="subSearch" placeholder="Filter by student, parent, email, module…" style="max-width:260px">
         <select id="subFilter" style="max-width:200px">
           <option value="all">All attempts</option>
           <option value="passed">Passed only</option>
@@ -350,7 +350,7 @@ async function verify(endpoint, key){
 }
 
 /* ---- login gate ---- */
-const REQUIRED_BACKEND = 5;
+const REQUIRED_BACKEND = 6;
 async function checkBackend(){
   let v = 0;
   try { const r = await fetch(conn.endpoint + "?action=version&t=" + Date.now()); const t = await r.text(); try { v = JSON.parse(t).version || 0; } catch (_) { v = 0; } }
@@ -682,6 +682,8 @@ const plainText = html => { const d = document.createElement("div"); d.innerHTML
    UI must match the copy in course.html. */
 const UI = {
   signIn:"Sign in", beforeBegin:"Before you begin", fullName:"Full name", namePh:"First and last name",
+  parentName:"Parent/Guardian Name", parentEmail:"Parent/Guardian Email", qualifyingName:"Qualifying Parent/Guardian Name",
+  studentName:"Student Name", sameAsParent:"Same as the parent/guardian above", studentPh:"Student's first and last name",
   email:"Email address", start:"Start course", loading:"Loading course…", sectionOf:"Section {n} of {total}",
   watchToUnlock:"Watch the full video to unlock the questions below.", watchToContinue:"Watch the full video to continue.",
   answerBelow:"Answer the questions below to continue.", videoDoneAnswer:"Video complete — answer the questions below.",
@@ -1192,19 +1194,21 @@ function filteredSubs(){
   return subObjects().filter(s => {
     const passed = String(s.passed).toLowerCase()==="true", completed = String(s.completedCourse).toLowerCase()==="true";
     if (f==="passed" && !passed) return false; if (f==="failed" && passed) return false; if (f==="completed" && !completed) return false;
-    if (q && !`${s.name} ${s.email} ${s.segmentTitle}`.toLowerCase().includes(q)) return false;
+    if (q && !`${s.name} ${s.email} ${s.studentName} ${s.qualifyingParent} ${s.segmentTitle}`.toLowerCase().includes(q)) return false;
     return true;
   }).reverse();
 }
 function renderSubs(){
   const all = subObjects(), rows = filteredSubs();
-  const people = new Set(all.map(s=>String(s.email).toLowerCase()));
-  const completers = new Set(all.filter(s=>String(s.completedCourse).toLowerCase()==="true").map(s=>String(s.email).toLowerCase()));
+  // A parent may complete the course for more than one student, so count parent email + student name.
+  const who = s => `${String(s.email).toLowerCase()}|${String(s.studentName || "").trim().toLowerCase()}`;
+  const people = new Set(all.map(who));
+  const completers = new Set(all.filter(s=>String(s.completedCourse).toLowerCase()==="true").map(who));
   const passRate = all.length ? Math.round(100*all.filter(s=>String(s.passed).toLowerCase()==="true").length/all.length) : 0;
-  $("stats").innerHTML = [[all.length,"Attempts"],[people.size,"Learners"],[completers.size,"Completed course"],[passRate+"%","First-try pass rate"]]
+  $("stats").innerHTML = [[all.length,"Attempts"],[people.size,"Students"],[completers.size,"Completed course"],[passRate+"%","First-try pass rate"]]
     .map(([n,l])=>`<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
-  const show = ["submittedAtLocal","name","email","language","segment","segmentTitle","attempt","score","passed","completedCourse","answers"];
-  const labels = { submittedAtLocal:"Submitted", name:"Name", email:"Email", segment:"#", segmentTitle:"Module", attempt:"Try", score:"Score", passed:"Result", completedCourse:"Finished", answers:"Answers", language:"Lang" };
+  const show = ["submittedAtLocal","studentName","name","email","qualifyingParent","language","segment","segmentTitle","attempt","score","passed","completedCourse","answers"];
+  const labels = { submittedAtLocal:"Submitted", studentName:"Student", name:"Parent/Guardian", email:"Email", qualifyingParent:"Qualifying parent", segment:"#", segmentTitle:"Module", attempt:"Try", score:"Score", passed:"Result", completedCourse:"Finished", answers:"Answers", language:"Lang" };
   $("subTable").querySelector("thead").innerHTML = "<tr>" + show.map(c=>`<th>${labels[c]}</th>`).join("") + "</tr>";
   $("subTable").querySelector("tbody").innerHTML = rows.map(s => "<tr>" + show.map(c => {
     let v = s[c];
@@ -1247,7 +1251,7 @@ function renderReviews(){
     <div class="rev-avg"><div class="n">${(sum / n).toFixed(1)}</div><div class="l">Average of ${n} review${n === 1 ? "" : "s"}</div></div>
     <div class="rev-bars">${dist.map(([k, c]) => `<div class="rev-bar"><span>${k}</span><div class="track"><div class="fill" style="width:${n ? (100 * c / n).toFixed(1) : 0}%"></div></div><span>${c} · ${n ? Math.round(100 * c / n) : 0}%</span></div>`).join("")}</div>` : "";
   $("revTable").querySelector("tbody").innerHTML = rows.map(r => `<tr>
-    <td>${esc(r.submittedAt ? new Date(r.submittedAt).toLocaleString() : r.submittedAtLocal)}</td><td>${esc(r.name)}</td><td>${esc(r.email)}</td><td>${esc(r.language)}</td>
+    <td>${esc(r.submittedAt ? new Date(r.submittedAt).toLocaleString() : r.submittedAtLocal)}</td><td>${esc(r.studentName)}</td><td>${esc(r.name)}</td><td>${esc(r.email)}</td><td>${esc(r.language)}</td>
     <td><span class="rating-pill">${esc(r.rating)}</span></td><td class="comment">${esc(r.comment)}</td></tr>`).join("");
   $("noRevs").classList.toggle("hidden", rows.length > 0);
 }

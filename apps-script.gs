@@ -25,17 +25,17 @@
  */
 
 const ADMIN_KEY = "change-me-to-a-long-secret";   // <-- change this
-const BACKEND_VERSION = 5;   // admin.html warns when the deployed script is older than it expects
+const BACKEND_VERSION = 6;   // admin.html warns when the deployed script is older than it expects
 
 const SUB_SHEET = "Submissions";
 const CFG_SHEET = "Config";
 const COLUMNS = [
   "submittedAt", "submittedAtLocal", "name", "email", "course",
   "segment", "segmentTitle", "attempt", "score", "passed",
-  "answers", "secondsOnSegment", "completedCourse", "language"
+  "answers", "secondsOnSegment", "completedCourse", "language", "qualifyingParent", "studentName"
 ];
 const REVIEW_SHEET = "Reviews";
-const REVIEW_COLUMNS = ["submittedAt", "submittedAtLocal", "name", "email", "course", "rating", "comment", "language"];
+const REVIEW_COLUMNS = ["submittedAt", "submittedAtLocal", "name", "email", "course", "rating", "comment", "language", "qualifyingParent", "studentName"];
 const CHUNK = 45000;   // characters per Config cell
 
 function json(obj) {
@@ -147,6 +147,7 @@ function doPost(e) {
       if (!(rating >= 1 && rating <= 5 && Math.round(rating) === rating)) return json({ ok: false, error: "Rating must be 1–5" });
       const r = sheet(REVIEW_SHEET);
       if (r.getLastRow() === 0) { r.appendRow(REVIEW_COLUMNS); r.getRange(1, 1, 1, REVIEW_COLUMNS.length).setFontWeight("bold"); r.setFrozenRows(1); }
+      else if (r.getLastColumn() < REVIEW_COLUMNS.length) r.getRange(1, 1, 1, REVIEW_COLUMNS.length).setValues([REVIEW_COLUMNS]).setFontWeight("bold");
       const row = Object.assign({}, data, { rating: rating, comment: String(data.comment || "").slice(0, 2000) });
       // Prefix values that a spreadsheet would treat as formulas, so a comment can't run as one.
       r.appendRow(REVIEW_COLUMNS.map(k => { const v = (k in row) ? row[k] : ""; return (typeof v === "string" && /^[=+\-@]/.test(v)) ? "'" + v : v; }));
@@ -162,7 +163,7 @@ function doPost(e) {
     } else if (s.getLastColumn() < COLUMNS.length) {
       s.getRange(1, 1, 1, COLUMNS.length).setValues([COLUMNS]).setFontWeight("bold");   // add new columns to an older sheet
     }
-    s.appendRow(COLUMNS.map(k => (k in data) ? data[k] : ""));
+    s.appendRow(COLUMNS.map(k => { const v = (k in data) ? data[k] : ""; return (typeof v === "string" && /^[=+\-@]/.test(v)) ? "'" + v : v; }));
     return json({ ok: true });
   } catch (err) {
     return json({ ok: false, error: String(err) });
