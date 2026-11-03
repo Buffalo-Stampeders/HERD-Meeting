@@ -302,10 +302,12 @@
 /* ---------------- state ---------------- */
 const $ = id => document.getElementById(id);
 const STORE = "courseAdminConn";
-const DEFAULT_ENDPOINT = "https://script.google.com/macros/s/AKfycbymna1peFFke8U96Dhyv-jQvQGNwtStQJP6-dGM9qB6cGTkviKNDVxSC6Nb3jbfDPOsGw/exec";
+const DEFAULT_ENDPOINT = "https://script.google.com/macros/s/AKfycbyIaPkIxqmGlvuTJDh-g4h55OtM6dkDdl180lrydjuW4j3oTaekmGZ4AHa3a48sQmyVlA/exec";
 // Session lasts for the tab unless "remember me" was ticked (then it persists in localStorage).
 let conn = JSON.parse(localStorage.getItem(STORE) || sessionStorage.getItem(STORE) || "{}");
-if (!conn.endpoint) conn.endpoint = DEFAULT_ENDPOINT;
+// Earlier backend deployments that no longer exist: a browser that remembered one switches to the current address.
+const RETIRED_ENDPOINTS = ["https://script.google.com/macros/s/AKfycbymna1peFFke8U96Dhyv-jQvQGNwtStQJP6-dGM9qB6cGTkviKNDVxSC6Nb3jbfDPOsGw/exec"];
+if (!conn.endpoint || RETIRED_ENDPOINTS.includes(conn.endpoint)) conn.endpoint = DEFAULT_ENDPOINT;
 let config = null;          // the course being edited
 let dirty = false;
 let subs = { columns: [], rows: [] };
