@@ -321,7 +321,7 @@ const UI = {
   cont:"Continue", finish:"Finish", recording:"Recording your answers…", recordingShort:"Recording…",
   correct:"Correct — {score}.", tryAgain:"{score} correct. Review the video and try again.",
   showNotes:"Show notes", hideNotes:"Hide notes", comingSoon:"Video coming soon", unavailable:"Video unavailable",
-  unavailableBody:"This video could not be loaded.", preview:"PREVIEW — submissions not logged", captions:"Captions", fullscreen:"Full screen",
+  unavailableBody:"This video could not be loaded.", preview:"PREVIEW — videos can be skipped, nothing is logged", captions:"Captions", fullscreen:"Full screen",
   noSkip:"Skipping ahead isn't allowed — please keep watching.",
   reviewEyebrow:"One last step", ratingLegend:"Rating from 1 to 5", ratingLow:"Poor", ratingHigh:"Excellent",
   commentsLabel:"Comments", optional:"(optional)", submitReview:"Submit review", ratingRequired:"Please choose a rating from 1 to 5.",
@@ -1107,7 +1107,9 @@ async function resumeFromServer(){
   const startBtn = $("startForm").querySelector("button[type=submit]"); startBtn.disabled = true;
   // Preview mode: admin.html passes its unpublished draft via sessionStorage; it's graded in the browser.
   if (new URLSearchParams(location.search).get("preview") === "1") {
-    try { const draft = JSON.parse(sessionStorage.getItem("coursePreviewConfig") || "null"); if (draft) { CONFIG = Object.assign({}, CONFIG, draft, { logEndpoint: "" }); state.preview = true; } } catch(_){}
+    try { const draft = JSON.parse(sessionStorage.getItem("coursePreviewConfig") || "null"); if (draft) { CONFIG = Object.assign({}, CONFIG, draft, { logEndpoint: "" }); state.preview = true;
+      // Preview only: videos unlocked so the admin can jump around and skip ahead. The public course keeps the lock.
+      CONFIG.requireFullWatch = false; CONFIG.lockPlayback = false; } } catch(_){}
   }
   if (serverMode()) {
     // Live course: only the course shell (titles, settings, interface text) loads up front.
