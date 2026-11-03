@@ -64,8 +64,10 @@
   .gallery-thumbs img.active{border-color:var(--green);opacity:1}
   /* lightbox */
   .lightbox{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:100;display:flex;align-items:center;justify-content:center;padding:16px}
-  .lightbox figure{margin:0;max-width:95vw;max-height:92vh;display:flex;flex-direction:column;align-items:center;gap:10px}
-  .lightbox img{max-width:95vw;max-height:84vh;object-fit:contain;box-shadow:0 10px 40px rgba(0,0,0,.6)}
+  .lightbox figure{margin:0;max-width:95vw;max-height:calc(var(--view-h, 100vh) * .92);display:flex;flex-direction:column;align-items:center;gap:10px}
+  .lightbox img{max-width:95vw;max-height:calc(var(--view-h, 100vh) * .84);object-fit:contain;box-shadow:0 10px 40px rgba(0,0,0,.6)}
+  /* embedded with the auto-resize snippet: the host page scrolls, so no scrollbar inside the frame */
+  html.auto-height, html.auto-height body{overflow:hidden}
   .lightbox figcaption{color:var(--tan);font-size:15px;text-align:center}
   .lb-close{position:absolute;top:10px;right:14px;background:transparent;border:0;color:#fff;font-size:44px;line-height:1;cursor:pointer}
   .lb-count{position:absolute;top:22px;left:20px;color:var(--bronze);font-size:11px;font-weight:700;letter-spacing:3px}
@@ -391,7 +393,7 @@ function showSegment(i){
   $("quiz").classList.toggle("locked", !state.watched);
   localizeSegment(false);
   renderProgress();
-  window.scrollTo({top:0, behavior:"smooth"});
+  scrollToCourseTop();
 }
 const segKind = seg => seg.type === "text" ? "text" : seg.type === "photo" ? "photo" : "video";
 function setNote(key){ state.noteKey = key; $("videoNote").textContent = key ? ui(key) : ""; }
@@ -920,7 +922,7 @@ function showReview(){
   state.idx = CONFIG.segments.length; renderProgress(); destroyPlayers();
   $("segmentCard").classList.add("hidden"); $("reviewCard").classList.remove("hidden");
   localizeReview();
-  window.scrollTo({top:0, behavior:"smooth"});
+  scrollToCourseTop();
 }
 function localizeReview(){
   $("reviewTitle").textContent = tr("c:reviewTitle", CONFIG.reviewTitle || "How was this meeting?");
@@ -951,7 +953,7 @@ function finish(){
   $("segmentCard").classList.add("hidden"); $("reviewCard").classList.add("hidden"); $("doneCard").classList.remove("hidden");
   $("doneTitle").textContent = tr("c:doneTitle", CONFIG.doneTitle); $("doneNote").textContent = tr("c:doneNote", CONFIG.doneNote);
   // Tell a parent page (e.g. Squarespace) that the course finished, if embedded in an iframe.
-  try { window.parent.postMessage({ type:"course-complete", name:state.name, email:state.email }, "*"); } catch(_){}
+  postParent({ type: "course-complete" });
 }
 
 async function logSubmission(entry){
@@ -962,6 +964,43 @@ async function logSubmission(entry){
     // text/plain avoids a CORS preflight, which Apps Script web apps do not answer.
     await fetch(CONFIG.logEndpoint, { method:"POST", mode:"no-cors", headers:{ "Content-Type":"text/plain" }, body: JSON.stringify(entry) });
   } catch(err) { console.warn("Log failed", err); }
+}
+
+/* ---------------- embedding: auto-height bridge ----------------
+   When the course sits in an <iframe> on another site, it reports its height to the host page, which
+   resizes the frame (see the embed snippet in README.md). The host replies with the part of the frame
+   that's visible, used to keep the image lightbox on screen and to scroll to the top between sections.
+   Only heights and scroll requests cross the boundary — never names or answers. */
+const EMBEDDED = window.parent !== window;
+let hostView = null;   // { top, height } of the frame's visible area, in frame coordinates
+function postParent(msg){ if (EMBEDDED) try { window.parent.postMessage(msg, "*"); } catch(_){} }
+function scrollToCourseTop(){
+  if (EMBEDDED && hostView) postParent({ type: "herd-scroll-top" });
+  else window.scrollTo({ top: 0, behavior: "smooth" });
+}
+function positionLightbox(){
+  const lb = $("lightbox");
+  if (!hostView) { lb.style.position = lb.style.top = lb.style.height = lb.style.bottom = ""; return; }
+  lb.style.position = "absolute"; lb.style.top = hostView.top + "px"; lb.style.height = hostView.height + "px"; lb.style.bottom = "auto";
+  document.documentElement.style.setProperty("--view-h", hostView.height + "px");
+}
+if (EMBEDDED) {
+  let lastH = 0;
+  const reportHeight = () => {
+    const app = $("app"); const h = Math.ceil(app.offsetTop + app.offsetHeight + 16);
+    if (Math.abs(h - lastH) > 1) { lastH = h; postParent({ type: "herd-height", height: h }); }
+  };
+  if (window.ResizeObserver) new ResizeObserver(reportHeight).observe($("app"));
+  window.addEventListener("load", reportHeight);
+  setInterval(reportHeight, 1000);   // backstop for anything ResizeObserver misses (e.g. late font loads)
+  window.addEventListener("message", e => {
+    if (e.source !== window.parent || !e.data || e.data.type !== "herd-viewport") return;
+    hostView = { top: Math.max(0, +e.data.top || 0), height: Math.max(200, +e.data.height || window.innerHeight) };
+    document.documentElement.classList.add("auto-height");
+    positionLightbox();
+  });
+  postParent({ type: "herd-ready" });
+  reportHeight();
 }
 
 // Init: fetch the published course content, then render.

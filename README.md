@@ -48,10 +48,9 @@ Images uploaded in the dashboard are stored in a Google Drive folder named "<She
 
 ## Embed on the website
 
-```html
-<iframe src="https://buffalo-stampeders.github.io/HERD-Meeting/course.html"
-        style="width:100%;height:900px;border:0;" allowfullscreen></iframe>
-```
+Paste the contents of [`embed-snippet.html`](embed-snippet.html) into a Code / HTML block on the site. The frame resizes to fit the course (no inner scrollbar), moving to the next section scrolls the page back to the top of the course, and enlarged images open in the visible part of the page. Set `HEADER_OFFSET` in the snippet to the height of the site's sticky header.
+
+A plain `<iframe>` without the script still works, just at a fixed height with its own scrollbar.
 
 ## Editing course content
 
