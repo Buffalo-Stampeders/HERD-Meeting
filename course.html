@@ -117,6 +117,7 @@
   .name-row{display:flex;gap:10px} .name-row input{flex:1;min-width:0}
   @media (max-width:480px){ .name-row{flex-direction:column;gap:8px} }
   .leave-note{font-size:13px;margin:16px 0 0}
+  .field-hint{margin:-1px 0 7px;font-size:13px;line-height:1.4;color:var(--muted,#666)}
   .lang-box{display:flex;flex-direction:column;align-items:flex-end;gap:5px}
   .tx-note{margin:0;font-size:11px;line-height:1.45;color:var(--muted,#666);text-align:right}
   .tx-note span{display:block;white-space:nowrap}
@@ -177,8 +178,9 @@
       </div>
       <div class="same-as"><input type="checkbox" id="sameAsParent"><label for="sameAsParent" data-ui="sameAsParent">Same as the parent/guardian above</label></div>
       <label for="sFirst" data-ui="studentName">Student Name</label>
+      <p class="field-hint" id="studentHint" data-ui="studentNote">If you have more than one student enrolled at TVCS, please provide only one student's name.</p>
       <div class="name-row">
-        <input type="text" id="sFirst" required autocomplete="off" placeholder="First name" data-ui-ph="firstName" data-ui-aria="firstName" aria-label="First name">
+        <input type="text" id="sFirst" required autocomplete="off" aria-describedby="studentHint" placeholder="First name" data-ui-ph="firstName" data-ui-aria="firstName" aria-label="First name">
         <input type="text" id="sLast" required autocomplete="off" placeholder="Last name" data-ui-ph="lastName" data-ui-aria="lastName" aria-label="Last name">
       </div>
       <p class="note leave-note" data-ui="stayNote">Please keep this page open until you finish. If you leave or close it before the end, your progress will be lost.</p>
@@ -336,6 +338,7 @@ const UI = {
   signIn:"Sign in", beforeBegin:"Before you begin", firstName:"First name", lastName:"Last name",
   parentName:"Parent/Guardian Name", parentEmail:"Parent/Guardian Email", parentId:"Parent ID Number", qualifyingName:"Qualifying Parent/Guardian Name",
   studentName:"Student Name", sameAsParent:"Same as the parent/guardian above",
+  studentNote:"If you have more than one student enrolled at TVCS, please provide only one student's name.",
   translateNote:"Translation provided by Google Translate.", translateNote2:"There may be unintended errors or exclusions.",
   stayNote:"Please keep this page open until you finish. If you leave or close it before the end, your progress will be lost.",
   email:"Email address", start:"Start course", loading:"Loading course…", sectionOf:"Section {n} of {total}",

@@ -353,7 +353,7 @@ async function verify(endpoint, key){
 }
 
 /* ---- login gate ---- */
-const REQUIRED_BACKEND = 9;
+const REQUIRED_BACKEND = 10;
 async function checkBackend(){
   let v = 0;
   try { const r = await fetch(conn.endpoint + "?action=version&t=" + Date.now()); const t = await r.text(); try { v = JSON.parse(t).version || 0; } catch (_) { v = 0; } }
@@ -687,6 +687,7 @@ const UI = {
   signIn:"Sign in", beforeBegin:"Before you begin", firstName:"First name", lastName:"Last name",
   parentName:"Parent/Guardian Name", parentEmail:"Parent/Guardian Email", parentId:"Parent ID Number", qualifyingName:"Qualifying Parent/Guardian Name",
   studentName:"Student Name", sameAsParent:"Same as the parent/guardian above",
+  studentNote:"If you have more than one student enrolled at TVCS, please provide only one student's name.",
   translateNote:"Translation provided by Google Translate.", translateNote2:"There may be unintended errors or exclusions.",
   stayNote:"Please keep this page open until you finish. If you leave or close it before the end, your progress will be lost.",
   email:"Email address", start:"Start course", loading:"Loading course…", sectionOf:"Section {n} of {total}",
@@ -1198,7 +1199,13 @@ async function loadSubmissions(){
   } catch(err) { setMsg("Could not load submissions — backend unreachable.", "bad"); }
   loadReviews();
 }
-function subObjects(){ return subs.rows.map(r => Object.fromEntries(subs.columns.map((c,i)=>[c, r[i]]))); }
+// The sheet uses readable headings ("Parent Last Name"); map them to the field names used here.
+const SUB_HEADINGS = { "Email":"email", "Parent Last Name":"parentLast", "Parent First Name":"parentFirst",
+  "Qualifying Parent Last Name":"qualifyingLast", "Qualifying Parent First Name":"qualifyingFirst", "Parent ID":"parentId",
+  "Student Last Name":"studentLast", "Student First Name":"studentFirst", "Completed":"submittedAtLocal", "Completed (UTC)":"submittedAt",
+  "Course":"course", "Language":"language", "Minutes":"minutes", "Retries":"retries" };
+const subKey = c => SUB_HEADINGS[c] || c;
+function subObjects(){ return subs.rows.map(r => Object.fromEntries(subs.columns.map((c,i)=>[subKey(c), r[i]]))); }
 // One row per learner who finished: fixed columns, then "Section 1", "Section 2", … (each "Title — result").
 const isSectionCol = c => /^Section \d+$/.test(c);
 function filteredSubs(){
@@ -1212,7 +1219,7 @@ function filteredSubs(){
 }
 function renderSubs(){
   const all = subObjects(), rows = filteredSubs();
-  const oldLayout = subs.columns.includes("segmentTitle");
+  const oldLayout = subs.columns.includes("segmentTitle"), cols = subs.columns.map(subKey);
   // A parent may complete the course for more than one student, so count parent email + student name.
   const studentOf = s => s.studentFirst !== undefined ? `${s.studentFirst} ${s.studentLast}` : (s.studentName || "");
   const who = s => `${String(s.email).toLowerCase()}|${String(studentOf(s)).trim().toLowerCase().replace(/\s+/g, " ")}`;
@@ -1223,12 +1230,13 @@ function renderSubs(){
   $("stats").innerHTML = oldLayout ? "" : [[all.length,"Completions"],[people.size,"Students"],[avg + " min","Average time"],[clean+"%","Finished with no retries"]]
     .map(([n,l])=>`<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
   const labels = { submittedAtLocal:"Finished", studentFirst:"Student first", studentLast:"Student last", parentFirst:"Parent first", parentLast:"Parent last",
-    email:"Email", parentId:"Parent ID", qualifyingFirst:"Qualifying first", qualifyingLast:"Qualifying last",
+    email:"Email", parentId:"Parent ID", qualifyingFirst:"Qualifying parent first", qualifyingLast:"Qualifying parent last",
     studentName:"Student", name:"Parent/Guardian", qualifyingParent:"Qualifying parent", language:"Lang", minutes:"Minutes", retries:"Retries" };
-  const base = subs.columns.includes("studentFirst")
-    ? ["submittedAtLocal","studentFirst","studentLast","parentFirst","parentLast","email","parentId","qualifyingFirst","qualifyingLast","language","minutes","retries"]
+  // Same order as the sheet: email, parent last/first, qualifying last/first, parent ID, student last/first, then the rest.
+  const base = cols.includes("studentFirst")
+    ? ["email","parentLast","parentFirst","qualifyingLast","qualifyingFirst","parentId","studentLast","studentFirst","submittedAtLocal","language","minutes","retries"]
     : ["submittedAtLocal","studentName","name","email","qualifyingParent","language","minutes","retries"];
-  const show = oldLayout ? subs.columns : base.filter(c => subs.columns.includes(c)).concat(subs.columns.filter(isSectionCol));
+  const show = oldLayout ? subs.columns : base.filter(c => cols.includes(c)).concat(subs.columns.filter(isSectionCol));
   $("subTable").querySelector("thead").innerHTML = "<tr>" + show.map(c=>`<th>${esc(labels[c] || c)}</th>`).join("") + "</tr>";
   $("subTable").querySelector("tbody").innerHTML = rows.map(s => "<tr>" + show.map(c => {
     let v = s[c];
@@ -1248,7 +1256,8 @@ $("refreshSubsBtn").addEventListener("click", loadSubmissions);
 $("csvBtn").addEventListener("click", () => {
   const rows = filteredSubs(); if (!rows.length) return;
   const cols = subs.columns;
-  const csv = [cols.join(",")].concat(rows.map(r => cols.map(c => `"${String(r[c] ?? "").replace(/"/g,'""')}"`).join(","))).join("\r\n");
+  const q = v => `"${String(v ?? "").replace(/"/g,'""')}"`;
+  const csv = [cols.map(q).join(",")].concat(rows.map(r => cols.map(c => q(r[subKey(c)])).join(","))).join("\r\n");
   download(`submissions-${new Date().toISOString().slice(0,10)}.csv`, csv, "text/csv");
 });
 

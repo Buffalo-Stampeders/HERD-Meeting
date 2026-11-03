@@ -33,13 +33,19 @@
  */
 
 const ADMIN_KEY = "change-me-to-a-long-secret";   // <-- change this
-const BACKEND_VERSION = 9;   // admin.html warns when the deployed script is older than it expects
+const BACKEND_VERSION = 10;   // admin.html warns when the deployed script is older than it expects
 
 const SUB_SHEET = "Submissions";
 const CFG_SHEET = "Config";
-// One row per learner who finishes. These come first, then "Section 1", "Section 2", … (one per section).
-const SUB_BASE = ["submittedAt", "submittedAtLocal", "studentFirst", "studentLast", "parentFirst", "parentLast", "email", "parentId",
-                  "qualifyingFirst", "qualifyingLast", "course", "language", "minutes", "retries"];
+// One row per learner who finishes. Column order and headings in the Submissions sheet: [field, heading]. "Section 1", "Section 2", … follow.
+const SUB_FIELDS = [
+  ["email", "Email"], ["parentLast", "Parent Last Name"], ["parentFirst", "Parent First Name"],
+  ["qualifyingLast", "Qualifying Parent Last Name"], ["qualifyingFirst", "Qualifying Parent First Name"],
+  ["parentId", "Parent ID"], ["studentLast", "Student Last Name"], ["studentFirst", "Student First Name"],
+  ["submittedAtLocal", "Completed"], ["submittedAt", "Completed (UTC)"], ["course", "Course"], ["language", "Language"],
+  ["minutes", "Minutes"], ["retries", "Retries"]
+];
+const SUB_BASE = SUB_FIELDS.map(f => f[1]);
 const REVIEW_SHEET = "Reviews";
 const REVIEW_COLUMNS = ["submittedAt", "submittedAtLocal", "name", "email", "course", "rating", "comment", "language", "qualifyingParent", "studentName", "parentId"];
 const CHUNK = 45000;          // characters per Config cell
@@ -190,8 +196,8 @@ function writeCompletion(cfg, s, now) {
     email: s.email, parentId: s.pid || "", qualifyingFirst: s.qf !== undefined ? s.qf : s.qualifying, qualifyingLast: s.ql || "",
     course: cfg.courseTitle, language: s.lang, minutes: Math.round((now.getTime() - t0) / 60000), retries: retries
   };
-  const vals = SUB_BASE.map(k => row[k]).concat(segs.map((seg, i) => sectionResult(seg, (s.res || {})[i]))).map(cellSafe);
-  vals[SUB_BASE.indexOf("parentId")] = asText(row.parentId);
+  const vals = SUB_FIELDS.map(f => row[f[0]]).concat(segs.map((seg, i) => sectionResult(seg, (s.res || {})[i]))).map(cellSafe);
+  vals[SUB_FIELDS.findIndex(f => f[0] === "parentId")] = asText(row.parentId);
   sh.appendRow(vals);
 }
 function appendRow(name, cols, row) {
