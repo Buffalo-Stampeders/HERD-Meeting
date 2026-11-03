@@ -117,9 +117,10 @@
   .name-row{display:flex;gap:10px} .name-row input{flex:1;min-width:0}
   @media (max-width:480px){ .name-row{flex-direction:column;gap:8px} }
   .leave-note{font-size:13px;margin:16px 0 0}
-  .lang-box{display:flex;flex-direction:column;align-items:flex-end;gap:4px;max-width:300px}
-  .tx-note{margin:0;font-size:11px;line-height:1.35;color:var(--muted,#666);text-align:right}
-  @media (max-width:600px){ .lang-box{align-items:flex-start} .tx-note{text-align:left} }
+  .lang-box{display:flex;flex-direction:column;align-items:flex-end;gap:5px}
+  .tx-note{margin:0;font-size:11px;line-height:1.45;color:var(--muted,#666);text-align:right}
+  .tx-note span{display:block;white-space:nowrap}
+  @media (max-width:600px){ .lang-box{align-items:flex-start} .tx-note{text-align:left} .tx-note span{white-space:normal} }
   .same-as input{accent-color:var(--green);width:16px;height:16px;margin:0}
   .same-as label{margin:0;font-size:13px;font-weight:500;letter-spacing:0;text-transform:none;color:var(--ink);cursor:pointer}
   .header-right{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
@@ -147,7 +148,7 @@
     <div class="header-right">
       <div class="lang-box hidden" id="langBox">
         <label class="lang-wrap" id="langWrap"><span aria-hidden="true">&#127760;</span><select id="langPick" class="lang-pick" aria-label="Language"></select></label>
-        <p class="tx-note" id="txNote" data-ui="translateNote">Translation provided by Google Translate. There may be unintended errors or exclusions.</p>
+        <p class="tx-note" id="txNote"><span data-ui="translateNote">Translation provided by Google Translate.</span> <span data-ui="translateNote2">There may be unintended errors or exclusions.</span></p>
       </div>
       <div class="who" id="who"></div>
     </div>
@@ -335,7 +336,7 @@ const UI = {
   signIn:"Sign in", beforeBegin:"Before you begin", firstName:"First name", lastName:"Last name",
   parentName:"Parent/Guardian Name", parentEmail:"Parent/Guardian Email", parentId:"Parent ID Number", qualifyingName:"Qualifying Parent/Guardian Name",
   studentName:"Student Name", sameAsParent:"Same as the parent/guardian above",
-  translateNote:"Translation provided by Google Translate. There may be unintended errors or exclusions.",
+  translateNote:"Translation provided by Google Translate.", translateNote2:"There may be unintended errors or exclusions.",
   stayNote:"Please keep this page open until you finish. If you leave or close it before the end, your progress will be lost.",
   email:"Email address", start:"Start course", loading:"Loading course…", sectionOf:"Section {n} of {total}",
   watchToUnlock:"Watch the full video to unlock the questions below.", watchToContinue:"Watch the full video to continue.",
