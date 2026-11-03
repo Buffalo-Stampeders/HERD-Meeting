@@ -329,7 +329,8 @@ const UI = {
   netError:"Couldn't reach the server. Check your connection, then try again.", missingFields:"Please fill in every field with a valid email address.",
   sessionExpired:"Your session timed out. Please sign in again to continue.", errEyebrow:"Something went wrong", retry:"Try again",
   loadFailTitle:"We couldn't load the course", loadFailBody:"Please check your internet connection and try again in a minute.",
-  notPublishedTitle:"This course isn't available yet", notPublished:"Please check back later."
+  notPublishedTitle:"This course isn't available yet", notPublished:"Please check back later.",
+  busy:"Lots of people are joining right now — one moment…", stillSaving:"Still saving — one moment…"
 };
 const LANG_NAMES = { en:"English", es:"Español", ht:"Kreyòl ayisyen", pt:"Português", fr:"Français", vi:"Tiếng Việt", "zh-CN":"中文（简体）",
   "zh-TW":"中文（繁體）", tl:"Tagalog", ar:"العربية", ru:"Русский", ko:"한국어", de:"Deutsch", it:"Italiano", ja:"日本語", pl:"Polski", uk:"Українська", hi:"हिन्दी" };
@@ -879,25 +880,31 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const SESSION_KEY = "courseSession";
 const serverMode = () => !!CONFIG.logEndpoint && !state.preview;
 const segCount = () => CONFIG.count != null ? CONFIG.count : CONFIG.segments.length;
-// POST with automatic retries: Apps Script occasionally sheds load or returns an error page under bursts.
-async function call(body, tries = 3){
-  let lastErr = null;
-  for (let k = 0; k < tries; k++) {
-    try {
-      const r = await fetch(CONFIG.logEndpoint, { method:"POST", headers:{ "Content-Type":"text/plain" }, body: JSON.stringify(body) });
-      return await r.json();
-    } catch (err) { lastErr = err; if (k < tries - 1) await sleep(900 * (k + 1) + Math.random() * 600); }
+// Patient retries. Apps Script runs at most ~30 requests at once; in a rush it turns the rest away with an
+// error. Instead of failing after a few seconds, keep retrying with growing, randomised gaps (so a crowd
+// spreads itself out) for up to RETRY_MAX_MS, telling the learner what's happening after the first miss.
+const RETRY_MAX_MS = window.__RETRY_MAX_MS || 90000;   // 90 s: in simulations of 2,000 arriving at once, nobody hits the error screen
+async function patient(doFetch, onWait){
+  const t0 = Date.now(); let attempt = 0, lastErr = null;
+  for (;;) {
+    try { return await doFetch(); } catch (err) { lastErr = err; attempt++; }
+    if (Date.now() - t0 > RETRY_MAX_MS) throw lastErr || new Error("network");
+    if (attempt === 1 && onWait) onWait();
+    const gap = Math.min(8000, 1000 * Math.pow(1.7, attempt - 1));
+    await sleep(gap * (0.5 + Math.random()));
   }
-  throw lastErr || new Error("network");
 }
-async function getJSON(url, tries = 3){
-  let lastErr = null;
-  for (let k = 0; k < tries; k++) {
-    try { const r = await fetch(url); return await r.json(); }
-    catch (err) { lastErr = err; if (k < tries - 1) await sleep(900 * (k + 1) + Math.random() * 600); }
-  }
-  throw lastErr || new Error("network");
+// One attempt: a busy/error page (non-2xx, HTML instead of JSON, or no answer within 20 s) counts as a miss.
+async function fetchJSON(url, opts){
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 20000);
+  try {
+    const r = await fetch(url, Object.assign({ signal: ctl.signal }, opts || {}));
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return await r.json();
+  } finally { clearTimeout(timer); }
 }
+const call = (body, onWait) => patient(() => fetchJSON(CONFIG.logEndpoint, { method:"POST", headers:{ "Content-Type":"text/plain" }, body: JSON.stringify(body) }), onWait);
+const getJSON = (url, onWait) => patient(() => fetchJSON(url), onWait);
 function mergeTx(tx){
   CONFIG.translations = CONFIG.translations || {};
   Object.keys(tx || {}).forEach(l => { CONFIG.translations[l] = Object.assign(CONFIG.translations[l] || {}, tx[l]); });
@@ -930,7 +937,7 @@ $("startForm").addEventListener("submit", async e => {
   if (serverMode()) {
     const btn = $("startForm").querySelector("button[type=submit]"); btn.disabled = true; $("startStatus").textContent = ui("starting");
     let r = null;
-    try { r = await call({ action:"start", name: state.name, email: state.email, qualifying: state.qualifying, student: state.student, lang: LANG }); }
+    try { r = await call({ action:"start", name: state.name, email: state.email, qualifying: state.qualifying, student: state.student, lang: LANG }, () => $("startStatus").textContent = ui("busy")); }
     catch (_) { btn.disabled = false; $("startStatus").innerHTML = `<span class="feedback bad">${esc(ui("netError"))}</span>`; return; }
     btn.disabled = false;
     if (!r.ok) { $("startStatus").innerHTML = `<span class="feedback bad">${esc(ui(r.error === "missing_fields" ? "missingFields" : r.error === "not_published" ? "notPublished" : "netError"))}</span>`; return; }
@@ -963,7 +970,7 @@ $("quizForm").addEventListener("submit", async e => {
 
   if (serverMode()) {
     let r;
-    try { r = await call({ action:"answer", token: state.token, index: state.idx, answers, lang: LANG }); }
+    try { r = await call({ action:"answer", token: state.token, index: state.idx, answers, lang: LANG }, () => $("status").textContent = ui("stillSaving")); }
     catch (_) { btn.disabled = false; $("status").innerHTML = `<span class="feedback bad">${esc(ui("netError"))}</span>`; return; }
     if (!r.ok) {
       btn.disabled = false;
@@ -1022,7 +1029,7 @@ $("reviewForm").addEventListener("submit", async e => {
   const rating = Number(picked.value), comment = $("reviewComment").value.trim();
   if (serverMode()) {
     let r;
-    try { r = await call({ action:"review", token: state.token, rating, comment, lang: LANG }); }
+    try { r = await call({ action:"review", token: state.token, rating, comment, lang: LANG }, () => $("reviewStatus").textContent = ui("stillSaving")); }
     catch (_) { btn.disabled = false; $("reviewStatus").innerHTML = `<span class="feedback bad">${esc(ui("netError"))}</span>`; return; }
     if (!r.ok && r.error === "expired") { clearSession(); finish(); return; }   // course already recorded as complete
     if (!r.ok) { btn.disabled = false; $("reviewStatus").innerHTML = `<span class="feedback bad">${esc(ui("netError"))}</span>`; return; }
@@ -1084,7 +1091,7 @@ if (EMBEDDED) {
 // Init
 async function resumeFromServer(){
   let r;
-  try { r = await call({ action:"resume", token: state.token }); } catch (_) { showError("loadFailTitle", "loadFailBody", true); return; }
+  try { r = await call({ action:"resume", token: state.token }, () => $("courseIntro").textContent = ui("busy")); } catch (_) { showError("loadFailTitle", "loadFailBody", true); return; }
   if (!r.ok) { clearSession(); showSignIn(r.error === "expired" ? "sessionExpired" : null); return; }
   state.name = r.name; state.email = r.email || ""; state.qualifying = r.qualifying || ""; state.student = r.student; CONFIG.count = r.count;
   $("who").textContent = `${state.student} · ${state.name}`;
@@ -1094,6 +1101,7 @@ async function resumeFromServer(){
 }
 (async () => {
   $("courseIntro").textContent = UI.loading;
+  const startBtn = $("startForm").querySelector("button[type=submit]"); startBtn.disabled = true;
   // Preview mode: admin.html passes its unpublished draft via sessionStorage; it's graded in the browser.
   if (new URLSearchParams(location.search).get("preview") === "1") {
     try { const draft = JSON.parse(sessionStorage.getItem("coursePreviewConfig") || "null"); if (draft) { CONFIG = Object.assign({}, CONFIG, draft, { logEndpoint: "" }); state.preview = true; } } catch(_){}
@@ -1101,7 +1109,7 @@ async function resumeFromServer(){
   if (serverMode()) {
     // Live course: only the course shell (titles, settings, interface text) loads up front.
     let r = null;
-    try { r = await getJSON(CONFIG.logEndpoint + "?action=shell&t=" + Date.now()); } catch (_) {}
+    try { r = await getJSON(CONFIG.logEndpoint + "?action=shell&t=" + Date.now(), () => $("courseIntro").textContent = UI.busy); } catch (_) {}
     if (!r || !r.ok) {
       CONFIG = { logEndpoint: CONFIG.logEndpoint, courseTitle: "", intro: "", segments: [], count: 0, translations: {} };   // nothing from the built-in demo
       initLanguages(); applyStatic();
@@ -1116,6 +1124,7 @@ async function resumeFromServer(){
   initLanguages();
   applyStatic();
   renderProgress();
+  startBtn.disabled = false;
   if (serverMode()) {
     let saved = null; try { saved = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null"); } catch(_){}
     if (saved && saved.token) { state.token = saved.token; await resumeFromServer(); }   // refresh mid-course: pick up where they left off
