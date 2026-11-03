@@ -1,6 +1,6 @@
 # HERD Meeting — Video Training Course
 
-Gated video training: learners enter name + email, watch each video segment, and must answer the multiple-choice questions to advance. Every attempt is logged to a Google Sheet.
+Gated video training: learners enter name + email, watch each video segment, and must answer the multiple-choice questions to advance. When a learner finishes, one row is written to the Google Sheet with their details and a column for each section's result (passed, score, number of tries, minutes spent).
 
 | File | Purpose |
 |---|---|
@@ -48,7 +48,7 @@ Images uploaded in the dashboard are stored in a Google Drive folder named "<She
 
 ## Security and reliability
 
-- **Answers stay on the server.** The course receives questions without the correct answers; the Apps Script backend grades each attempt and writes the result to the sheet itself, so answers can't be read from the page and pass/fail results can't be faked.
+- **Answers stay on the server.** The course receives questions without the correct answers; the Apps Script backend grades each attempt and writes the learner's row to the sheet itself, so answers can't be read from the page and pass/fail results can't be faked.
 - **One section at a time.** A learner receives a section only after passing the previous one (tracked in a 6-hour session). Refreshing the page resumes where they left off.
 - **Admin-only data needs the key**, sent in the request body (never in the URL): full course, submissions, reviews, publishing, uploads, translation.
 - **Search engines and AI crawlers** are asked not to index the course or dashboard (`noindex` tags). This is a request, not a lock.

@@ -73,6 +73,7 @@
   .tablewrap{overflow:auto;max-height:65vh;border:1px solid var(--line)}
   .pill{display:inline-block;padding:1px 8px;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase}
   .pill.ok{background:#e8f5ec;color:var(--ok)} .pill.bad{background:#fdecea;color:var(--bad)}
+  #subTable td{vertical-align:top} .sec-title{font-size:12px;color:var(--muted,#666);min-width:140px} .sec-res{font-weight:600;color:var(--ok)} .sec-res.warn{color:var(--bronze)}
   .stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}
   .stat{flex:1;min-width:140px;background:var(--card);border:1px solid var(--line);border-top:3px solid var(--bronze);padding:12px 14px}
   .stat .n{font-family:var(--font-head);font-weight:800;font-size:30px;color:var(--green);line-height:1.1}
@@ -274,12 +275,11 @@
     <div class="card">
       <div class="toolbar">
         <h2>Submissions</h2><span class="spacer"></span>
-        <input type="text" id="subSearch" placeholder="Filter by student, parent, email, module…" style="max-width:260px">
+        <input type="text" id="subSearch" placeholder="Filter by student, parent, email…" style="max-width:260px">
         <select id="subFilter" style="max-width:200px">
-          <option value="all">All attempts</option>
-          <option value="passed">Passed only</option>
-          <option value="failed">Failed only</option>
-          <option value="completed">Course completions</option>
+          <option value="all">All completions</option>
+          <option value="retries">Needed retries</option>
+          <option value="clean">All first try</option>
         </select>
         <button class="btn ghost sm" id="refreshSubsBtn">Refresh</button>
         <button class="btn sm" id="csvBtn">Download CSV</button>
@@ -353,7 +353,7 @@ async function verify(endpoint, key){
 }
 
 /* ---- login gate ---- */
-const REQUIRED_BACKEND = 7;
+const REQUIRED_BACKEND = 8;
 async function checkBackend(){
   let v = 0;
   try { const r = await fetch(conn.endpoint + "?action=version&t=" + Date.now()); const t = await r.text(); try { v = JSON.parse(t).version || 0; } catch (_) { v = 0; } }
@@ -1197,35 +1197,42 @@ async function loadSubmissions(){
   loadReviews();
 }
 function subObjects(){ return subs.rows.map(r => Object.fromEntries(subs.columns.map((c,i)=>[c, r[i]]))); }
+// One row per learner who finished: fixed columns, then "Section 1", "Section 2", … (each "Title — result").
+const isSectionCol = c => /^Section \d+$/.test(c);
 function filteredSubs(){
   const q = $("subSearch").value.trim().toLowerCase(), f = $("subFilter").value;
   return subObjects().filter(s => {
-    const passed = String(s.passed).toLowerCase()==="true", completed = String(s.completedCourse).toLowerCase()==="true";
-    if (f==="passed" && !passed) return false; if (f==="failed" && passed) return false; if (f==="completed" && !completed) return false;
-    if (q && !`${s.name} ${s.email} ${s.studentName} ${s.qualifyingParent} ${s.segmentTitle}`.toLowerCase().includes(q)) return false;
+    const retries = Number(s.retries) || 0;
+    if (f==="retries" && !retries) return false; if (f==="clean" && retries) return false;
+    if (q && !Object.values(s).join(" ").toLowerCase().includes(q)) return false;
     return true;
   }).reverse();
 }
 function renderSubs(){
   const all = subObjects(), rows = filteredSubs();
+  const oldLayout = subs.columns.includes("segmentTitle");
   // A parent may complete the course for more than one student, so count parent email + student name.
   const who = s => `${String(s.email).toLowerCase()}|${String(s.studentName || "").trim().toLowerCase()}`;
   const people = new Set(all.map(who));
-  const completers = new Set(all.filter(s=>String(s.completedCourse).toLowerCase()==="true").map(who));
-  const passRate = all.length ? Math.round(100*all.filter(s=>String(s.passed).toLowerCase()==="true").length/all.length) : 0;
-  $("stats").innerHTML = [[all.length,"Attempts"],[people.size,"Students"],[completers.size,"Completed course"],[passRate+"%","First-try pass rate"]]
+  const mins = all.map(s => Number(s.minutes)).filter(n => n >= 0);
+  const avg = mins.length ? Math.round(mins.reduce((a, b) => a + b, 0) / mins.length) : 0;
+  const clean = all.length ? Math.round(100 * all.filter(s => !(Number(s.retries) || 0)).length / all.length) : 0;
+  $("stats").innerHTML = oldLayout ? "" : [[all.length,"Completions"],[people.size,"Students"],[avg + " min","Average time"],[clean+"%","Finished with no retries"]]
     .map(([n,l])=>`<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
-  const show = ["submittedAtLocal","studentName","name","email","qualifyingParent","language","segment","segmentTitle","attempt","score","passed","completedCourse","answers"];
-  const labels = { submittedAtLocal:"Submitted", studentName:"Student", name:"Parent/Guardian", email:"Email", qualifyingParent:"Qualifying parent", segment:"#", segmentTitle:"Module", attempt:"Try", score:"Score", passed:"Result", completedCourse:"Finished", answers:"Answers", language:"Lang" };
-  $("subTable").querySelector("thead").innerHTML = "<tr>" + show.map(c=>`<th>${labels[c]}</th>`).join("") + "</tr>";
+  const labels = { submittedAtLocal:"Finished", studentName:"Student", name:"Parent/Guardian", email:"Email", qualifyingParent:"Qualifying parent", language:"Lang", minutes:"Minutes", retries:"Retries" };
+  const show = oldLayout ? subs.columns : ["submittedAtLocal","studentName","name","email","qualifyingParent","language","minutes","retries"].concat(subs.columns.filter(isSectionCol));
+  $("subTable").querySelector("thead").innerHTML = "<tr>" + show.map(c=>`<th>${esc(labels[c] || c)}</th>`).join("") + "</tr>";
   $("subTable").querySelector("tbody").innerHTML = rows.map(s => "<tr>" + show.map(c => {
     let v = s[c];
-    if (c==="passed") v = String(v).toLowerCase()==="true" ? `<span class="pill ok">Pass</span>` : `<span class="pill bad">Retry</span>`;
-    else if (c==="completedCourse") v = String(v).toLowerCase()==="true" ? "✓" : "";
-    else if (c==="submittedAtLocal" && s.submittedAt) v = esc(new Date(s.submittedAt).toLocaleString());
+    if (c==="submittedAtLocal" && s.submittedAt) v = esc(new Date(s.submittedAt).toLocaleString());
+    else if (isSectionCol(c) && v) {
+      const m = String(v).match(/^(.*) — (.*)$/);
+      v = m ? `<div class="sec-title">${esc(m[1])}</div><div class="sec-res${/tries/.test(m[2]) ? " warn" : ""}">${esc(m[2])}</div>` : esc(v);
+    }
     else v = esc(v);
     return `<td>${v}</td>`; }).join("") + "</tr>").join("");
   $("noSubs").classList.toggle("hidden", rows.length > 0);
+  $("noSubs").textContent = oldLayout ? "This sheet is in the old one-row-per-attempt layout. Update the Apps Script backend (Deploy → Manage deployments → New version)." : "No completions yet.";
 }
 $("subSearch").addEventListener("input", renderSubs);
 $("subFilter").addEventListener("change", renderSubs);

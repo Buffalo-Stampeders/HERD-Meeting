@@ -2,7 +2,7 @@
  * Course backend for course.html + admin.html
  * --------------------------------------------
  * Stores the course content, delivers it to learners one section at a time, grades quiz answers,
- * and logs every attempt and end-of-course review.
+ * and logs one row per learner when they finish, plus their end-of-course review.
  *
  * SETUP
  * 1. Create a new Google Sheet.
@@ -17,7 +17,8 @@
  * AFTER EDITING THIS FILE LATER: Deploy → Manage deployments → pencil → Version: New → Deploy.
  * (The URL stays the same; without a new version the live app keeps the old code.)
  *
- * Sheets created automatically:  "Submissions" (one row per quiz attempt, graded here)
+ * Sheets created automatically:  "Submissions" (one row per learner, written when they pass the last section,
+ *                                               with a "Section N" column for each section's result)
  *                                 "Reviews"     (one row per end-of-course rating + comment)
  *                                 "Config"      (course JSON, split across A2, A3, … to stay under
  *                                                Google Sheets' 50,000-character cell limit)
@@ -32,15 +33,13 @@
  */
 
 const ADMIN_KEY = "change-me-to-a-long-secret";   // <-- change this
-const BACKEND_VERSION = 7;   // admin.html warns when the deployed script is older than it expects
+const BACKEND_VERSION = 8;   // admin.html warns when the deployed script is older than it expects
 
 const SUB_SHEET = "Submissions";
 const CFG_SHEET = "Config";
-const COLUMNS = [
-  "submittedAt", "submittedAtLocal", "name", "email", "course",
-  "segment", "segmentTitle", "attempt", "score", "passed",
-  "answers", "secondsOnSegment", "completedCourse", "language", "qualifyingParent", "studentName"
-];
+// One row per learner who finishes. These come first, then "Section 1", "Section 2", … (one per section).
+const SUB_BASE = ["submittedAt", "submittedAtLocal", "studentName", "name", "email", "qualifyingParent",
+                  "course", "language", "minutes", "retries"];
 const REVIEW_SHEET = "Reviews";
 const REVIEW_COLUMNS = ["submittedAt", "submittedAtLocal", "name", "email", "course", "rating", "comment", "language", "qualifyingParent", "studentName"];
 const CHUNK = 45000;          // characters per Config cell
@@ -144,6 +143,52 @@ function ensureHeader(sh, cols) {
     else if (sh.getLastColumn() < cols.length) sh.getRange(1, 1, 1, cols.length).setValues([cols]).setFontWeight("bold");
   } finally { lock.releaseLock(); }
 }
+// The Submissions sheet: SUB_BASE + "Section 1"…"Section n". A sheet in the older one-row-per-attempt
+// layout is renamed "Submissions (old format)" (nothing deleted) and a fresh one started.
+function completionSheet(n) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(SUB_SHEET);
+  const want = k => SUB_BASE.concat(Array.from({ length: k }, (_, i) => "Section " + (i + 1)));
+  if (sh && sh.getLastRow() > 0) {
+    const w = sh.getLastColumn(), head = sh.getRange(1, 1, 1, w).getValues()[0].map(String);
+    const fits = SUB_BASE.every((c, k) => head[k] === c);
+    const have = head.filter(h => /^Section \d+$/.test(h)).length;
+    if (fits && have >= n) return sh;
+    const lock = LockService.getScriptLock(); lock.waitLock(20000);
+    try {
+      if (!fits && sh.getLastRow() > 1) {
+        let name = SUB_SHEET + " (old format)"; for (let k = 2; ss.getSheetByName(name); k++) name = SUB_SHEET + " (old format " + k + ")";
+        sh.setName(name); sh = ss.insertSheet(SUB_SHEET);
+      } else {
+        const cols = want(fits ? Math.max(n, have) : n);
+        sh.getRange(1, 1, 1, Math.max(w, cols.length)).clearContent();
+        sh.getRange(1, 1, 1, cols.length).setValues([cols]).setFontWeight("bold");
+        return sh;
+      }
+    } finally { lock.releaseLock(); }
+  }
+  sh = sh || ss.insertSheet(SUB_SHEET);
+  ensureHeader(sh, want(n));
+  return sh;
+}
+function sectionResult(seg, r) {
+  if (!r) return (seg.title || "") + " — completed";
+  const mins = r.sec != null ? " · " + Math.max(1, Math.round(r.sec / 60)) + " min" : "";
+  if (!r.t) return (seg.title || "") + " — Viewed" + mins;
+  const tries = r.a === 1 ? "1st try" : r.a + " tries";
+  return (seg.title || "") + " — Passed " + r.c + "/" + r.t + " · " + tries + mins;
+}
+function writeCompletion(cfg, s, now) {
+  const segs = cfg.segments, n = segs.length, sh = completionSheet(n);
+  const t0 = s.t0 || (s.dl && s.dl[0]) || now.getTime();
+  let retries = 0; for (let i = 0; i < n; i++) retries += Math.max(0, ((s.att || {})[i] || 1) - 1);
+  const row = {
+    submittedAt: now.toISOString(), submittedAtLocal: localStamp(now), studentName: s.student, name: s.name, email: s.email,
+    qualifyingParent: s.qualifying, course: cfg.courseTitle, language: s.lang, minutes: Math.round((now.getTime() - t0) / 60000), retries: retries
+  };
+  const vals = SUB_BASE.map(k => row[k]).concat(segs.map((seg, i) => sectionResult(seg, (s.res || {})[i])));
+  sh.appendRow(vals.map(cellSafe));
+}
 function appendRow(name, cols, row) {
   const sh = sheet(name); ensureHeader(sh, cols);
   sh.appendRow(cols.map(k => cellSafe((k in row) ? row[k] : "")));
@@ -183,8 +228,9 @@ function doPost(e) {
       case "saveConfig": return json(saveConfig(data));
       case "listSubmissions": case "listReviews": {
         if (!isAdmin(data.key)) return json({ ok: false, error: "Unauthorized" });
-        const subs = data.action === "listSubmissions";
-        const cols = subs ? COLUMNS : REVIEW_COLUMNS, s = sheet(subs ? SUB_SHEET : REVIEW_SHEET);
+        const subs = data.action === "listSubmissions", s = sheet(subs ? SUB_SHEET : REVIEW_SHEET);
+        let cols = REVIEW_COLUMNS;
+        if (subs) cols = s.getLastRow() > 0 ? s.getRange(1, 1, 1, s.getLastColumn()).getValues()[0].map(String).filter(Boolean) : SUB_BASE;
         const rows = s.getLastRow() > 1 ? s.getRange(2, 1, s.getLastRow() - 1, cols.length).getValues() : [];
         return json({ ok: true, columns: cols, rows: rows });
       }
@@ -248,7 +294,7 @@ function startSession(d) {
   if (!name || !qualifying || !student || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, error: "missing_fields" };
   const token = Utilities.getUuid();
   const now = Date.now();
-  putSession(token, { name, email, qualifying, student, lang: str(d.lang, 10) || "en", p: 0, att: {}, dl: { 0: now }, rev: false });
+  putSession(token, { name, email, qualifying, student, lang: str(d.lang, 10) || "en", p: 0, att: {}, dl: { 0: now }, res: {}, t0: now, rev: false });
   return { ok: true, token, progress: 0, count: cfg.segments.length, section: publicSection(cfg, 0) };
 }
 function resumeSession(d) {
@@ -273,14 +319,12 @@ function gradeAnswer(d) {
   s.att[i] = (s.att[i] || 0) + 1;
   if (d.lang) s.lang = str(d.lang, 10);
   const now = new Date();
-  appendRow(SUB_SHEET, COLUMNS, {
-    submittedAt: now.toISOString(), submittedAtLocal: localStamp(now), name: s.name, email: s.email, course: cfg.courseTitle,
-    segment: i + 1, segmentTitle: seg.title, attempt: s.att[i], score: questions.length ? correct + "/" + total : "viewed", passed: passed,
-    answers: questions.length ? questions.map((q, k) => (q.options || [])[answers[k]] || "").join(" | ") : "(no quiz)",
-    secondsOnSegment: s.dl[i] ? Math.round((now.getTime() - s.dl[i]) / 1000) : "",
-    completedCourse: passed && i === count - 1, language: s.lang, qualifyingParent: s.qualifying, studentName: s.student
-  });
-  if (passed) { s.p = i + 1; if (s.p < count) s.dl[s.p] = now.getTime(); }
+  if (passed) {
+    s.res = s.res || {};
+    s.res[i] = { c: correct, t: total, a: s.att[i], sec: s.dl[i] ? Math.round((now.getTime() - s.dl[i]) / 1000) : null };
+    s.p = i + 1; if (s.p < count) s.dl[s.p] = now.getTime();
+    if (s.p >= count) writeCompletion(cfg, s, now);   // the only Submissions row for this learner
+  }
   putSession(d.token, s);
   const out = { ok: true, passed, correct, total, results, completed: passed && s.p >= count,
                 next: passed && s.p < count ? publicSection(cfg, s.p) : null };
