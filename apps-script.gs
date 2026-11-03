@@ -1,7 +1,8 @@
 /**
  * Course backend for course.html + admin.html
  * --------------------------------------------
- * Stores the course content (modules, videos, questions) and logs every quiz submission.
+ * Stores the course content, delivers it to learners one section at a time, grades quiz answers,
+ * and logs every attempt and end-of-course review.
  *
  * SETUP
  * 1. Create a new Google Sheet.
@@ -16,16 +17,22 @@
  * AFTER EDITING THIS FILE LATER: Deploy → Manage deployments → pencil → Version: New → Deploy.
  * (The URL stays the same; without a new version the live app keeps the old code.)
  *
- * Sheets created automatically:  "Submissions" (one row per quiz attempt)
+ * Sheets created automatically:  "Submissions" (one row per quiz attempt, graded here)
  *                                 "Reviews"     (one row per end-of-course rating + comment)
  *                                 "Config"      (course JSON, split across A2, A3, … to stay under
  *                                                Google Sheets' 50,000-character cell limit)
+ *
+ * SECURITY MODEL
+ * - Correct answers never leave this script. Learners get questions without answers; this script grades them.
+ * - A learner only receives a section after passing the one before it (tracked in a session that lasts 6 hours).
+ * - Everything admin-only (full course, submissions, reviews, publishing, uploads, translation) needs ADMIN_KEY,
+ *   sent in the request body — never in the web address.
  *
  * Translation uses Google Translate through Apps Script's built-in LanguageApp — no API key needed.
  */
 
 const ADMIN_KEY = "change-me-to-a-long-secret";   // <-- change this
-const BACKEND_VERSION = 6;   // admin.html warns when the deployed script is older than it expects
+const BACKEND_VERSION = 7;   // admin.html warns when the deployed script is older than it expects
 
 const SUB_SHEET = "Submissions";
 const CFG_SHEET = "Config";
@@ -36,7 +43,9 @@ const COLUMNS = [
 ];
 const REVIEW_SHEET = "Reviews";
 const REVIEW_COLUMNS = ["submittedAt", "submittedAtLocal", "name", "email", "course", "rating", "comment", "language", "qualifyingParent", "studentName"];
-const CHUNK = 45000;   // characters per Config cell
+const CHUNK = 45000;          // characters per Config cell
+const CACHE_CHUNK = 25000;    // characters per cache entry (cache values are capped at 100 KB)
+const SESSION_TTL = 21600;    // 6 hours, the longest Apps Script's cache allows
 
 function json(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
@@ -55,121 +64,243 @@ function imageFolder() {
   const existing = parent.getFoldersByName(name);
   return existing.hasNext() ? existing.next() : parent.createFolder(name);
 }
+// Values starting with = + - @ would be treated as formulas by Sheets; store them as text.
+const cellSafe = v => (typeof v === "string" && /^[=+\-@]/.test(v)) ? "'" + v : v;
 
-/* ---------- GET: course config (public) and submissions (admin) ---------- */
+/* ---------- published course: read through the cache so learners don't each hit the sheet ---------- */
+function readConfigFromSheet() {
+  const s = sheet(CFG_SHEET);
+  const last = s.getLastRow();
+  if (last < 2) return { config: null, updatedAt: null };
+  const raw = s.getRange(2, 1, last - 1, 1).getValues().map(r => r[0]).join("");
+  return { config: raw ? JSON.parse(raw) : null, updatedAt: s.getRange("B2").getValue() || null };
+}
+function cacheConfig(text, updatedAt) {
+  const cache = CacheService.getScriptCache();
+  const parts = {}; let n = 0;
+  for (let i = 0; i < text.length; i += CACHE_CHUNK) parts["cfg:" + (n++)] = text.slice(i, i + CACHE_CHUNK);
+  parts["cfg:n"] = String(n); parts["cfg:at"] = String(updatedAt || "");
+  try { cache.putAll(parts, SESSION_TTL); } catch (e) { /* too big to cache: the sheet is still the source */ }
+}
+let _cfgMemo = null;
+function getConfig() {
+  if (_cfgMemo) return _cfgMemo;
+  const cache = CacheService.getScriptCache();
+  const n = Number(cache.get("cfg:n") || 0);
+  if (n) {
+    const keys = []; for (let i = 0; i < n; i++) keys.push("cfg:" + i);
+    const got = cache.getAll(keys);
+    if (keys.every(k => typeof got[k] === "string")) {
+      try { _cfgMemo = { config: JSON.parse(keys.map(k => got[k]).join("")), updatedAt: cache.get("cfg:at") || null }; return _cfgMemo; } catch (e) {}
+    }
+  }
+  const fromSheet = readConfigFromSheet();
+  if (fromSheet.config) { cacheConfig(JSON.stringify(fromSheet.config), fromSheet.updatedAt); _cfgMemo = fromSheet; }
+  return fromSheet;
+}
+
+/* ---------- what learners are allowed to see ---------- */
+const COURSE_FIELDS = ["courseTitle", "intro", "doneTitle", "doneNote", "requireFullWatch", "lockPlayback", "requireAllCorrect",
+  "revealCorrect", "captionsOn", "reviewEnabled", "reviewTitle", "reviewPrompt", "languages"];
+function pickTranslations(cfg, test) {
+  const out = {};
+  Object.keys(cfg.translations || {}).forEach(lang => {
+    const src = cfg.translations[lang] || {}, dst = {};
+    Object.keys(src).forEach(k => { if (test(k)) dst[k] = src[k]; });
+    out[lang] = dst;
+  });
+  return out;
+}
+function publicShell(cfg) {
+  const shell = { count: (cfg.segments || []).length };
+  COURSE_FIELDS.forEach(f => { if (f in cfg) shell[f] = cfg[f]; });
+  shell.translations = pickTranslations(cfg, k => /^(c|ui):/.test(k));
+  return shell;
+}
+function publicSection(cfg, i) {
+  const seg = cfg.segments[i]; if (!seg) return null;
+  const out = JSON.parse(JSON.stringify(seg));
+  delete out._driveTooBig; delete out._vimeoUnresolved;
+  out.questions = (seg.noQuiz ? [] : (seg.questions || [])).map(q => ({ id: q.id, q: q.q, options: q.options }));   // no answers
+  const ids = new Set([seg.id].concat((seg.questions || []).map(q => q.id), (seg.images || []).map(im => im.id)));
+  out.tx = pickTranslations(cfg, k => { const m = k.match(/^(?:s|q|i|cap):([^:]+)/); return !!m && ids.has(m[1]); });
+  return out;
+}
+
+/* ---------- learner sessions (cache, 6 hours) ---------- */
+function getSession(token) {
+  if (!token || typeof token !== "string") return null;
+  const raw = CacheService.getScriptCache().get("s:" + token);
+  return raw ? JSON.parse(raw) : null;
+}
+function putSession(token, s) { CacheService.getScriptCache().put("s:" + token, JSON.stringify(s), SESSION_TTL); }
+
+/* ---------- sheet writes: appendRow is atomic, so no script-wide lock is needed per row ---------- */
+function ensureHeader(sh, cols) {
+  if (sh.getLastRow() > 0 && sh.getLastColumn() >= cols.length) return;
+  const lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    if (sh.getLastRow() === 0) { sh.appendRow(cols); sh.getRange(1, 1, 1, cols.length).setFontWeight("bold"); sh.setFrozenRows(1); }
+    else if (sh.getLastColumn() < cols.length) sh.getRange(1, 1, 1, cols.length).setValues([cols]).setFontWeight("bold");
+  } finally { lock.releaseLock(); }
+}
+function appendRow(name, cols, row) {
+  const sh = sheet(name); ensureHeader(sh, cols);
+  sh.appendRow(cols.map(k => cellSafe((k in row) ? row[k] : "")));
+}
+function localStamp(d) { return Utilities.formatDate(d, Session.getScriptTimeZone(), "M/d/yyyy, h:mm:ss a"); }
+
+/* ---------- GET ---------- */
 function doGet(e) {
   const p = (e && e.parameter) || {};
-  if (p.action === "config") {
-    const s = sheet(CFG_SHEET);
-    const last = s.getLastRow();
-    const raw = last >= 2 ? s.getRange(2, 1, last - 1, 1).getValues().map(r => r[0]).join("") : "";
-    return json({ ok: true, config: raw ? JSON.parse(raw) : null, updatedAt: last >= 2 ? (s.getRange("B2").getValue() || null) : null });
-  }
-  if (p.action === "submissions") {
-    if (!isAdmin(p.key)) return json({ ok: false, error: "Unauthorized" });
-    const s = sheet(SUB_SHEET);
-    const rows = s.getLastRow() > 1 ? s.getRange(2, 1, s.getLastRow() - 1, COLUMNS.length).getValues() : [];
-    return json({ ok: true, columns: COLUMNS, rows: rows });
-  }
   if (p.action === "version") return json({ ok: true, version: BACKEND_VERSION });
-  if (p.action === "reviews") {
-    if (!isAdmin(p.key)) return json({ ok: false, error: "Unauthorized" });
-    const s = sheet(REVIEW_SHEET);
-    const rows = s.getLastRow() > 1 ? s.getRange(2, 1, s.getLastRow() - 1, REVIEW_COLUMNS.length).getValues() : [];
-    return json({ ok: true, columns: REVIEW_COLUMNS, rows: rows });
+  if (p.action === "shell") {
+    const c = getConfig();
+    return json(c.config ? { ok: true, shell: publicShell(c.config), updatedAt: c.updatedAt } : { ok: false, error: "not_published" });
   }
   return ContentService.createTextOutput("Course backend is running.");
 }
 
-/* ---------- POST: save config (admin) or log a submission (public) ---------- */
+/* ---------- POST ---------- */
 function doPost(e) {
   let data;
   try { data = JSON.parse(e.postData.contents); } catch (err) { return json({ ok: false, error: "Bad request" }); }
-
-  // Read-only / slow actions run without the script lock so they never hold up learners' submissions.
-  if (data.action === "translate") {
-    if (!isAdmin(data.key)) return json({ ok: false, error: "Unauthorized" });
-    try { return json({ ok: true, results: translateItems(data.items || [], data.source || "en", String(data.target || "")) }); }
-    catch (err) { return json({ ok: false, error: String(err) }); }
-  }
-
-  const lock = LockService.getScriptLock();
-  lock.waitLock(20000);
   try {
-    if (data.action === "saveConfig") {
-      if (!isAdmin(data.key)) return json({ ok: false, error: "Unauthorized" });
-      if (!data.config || !Array.isArray(data.config.segments)) return json({ ok: false, error: "Invalid config" });
-      const s = sheet(CFG_SHEET);
-      if (s.getLastRow() === 0) { s.appendRow(["courseJson", "updatedAt"]); s.getRange(1,1,1,2).setFontWeight("bold"); }
-      const now = new Date().toISOString();
-      const text = JSON.stringify(data.config);
-      const parts = [];
-      for (let i = 0; i < text.length; i += CHUNK) parts.push([text.slice(i, i + CHUNK)]);
-      if (s.getLastRow() >= 2) s.getRange(2, 1, s.getLastRow() - 1, 2).clearContent();
-      s.getRange(2, 1, parts.length, 1).setNumberFormat("@").setValues(parts);
-      s.getRange("B2").setValue(now);
-      return json({ ok: true, updatedAt: now, cells: parts.length });
-    }
+    switch (data.action) {
+      /* learners */
+      case "start":   return json(startSession(data));
+      case "resume":  return json(resumeSession(data));
+      case "answer":  return json(gradeAnswer(data));
+      case "review":  return json(saveReview(data));
 
-    if (data.action === "checkKey") {
-      return json({ ok: isAdmin(data.key) });
-    }
-
-    // Drive video check from admin.html: size / type / sharing, so the dashboard can warn before publishing.
-    if (data.action === "driveFileInfo") {
-      if (!isAdmin(data.key)) return json({ ok: false, error: "Unauthorized" });
-      try {
-        const f = DriveApp.getFileById(String(data.id));
-        let publicLink = false;
-        try { const a = f.getSharingAccess(); publicLink = (a === DriveApp.Access.ANYONE_WITH_LINK || a === DriveApp.Access.ANYONE); } catch (_) {}
-        return json({ ok: true, name: f.getName(), size: f.getSize(), mime: f.getMimeType(), publicLink: publicLink });
-      } catch (err) {
-        return json({ ok: false, error: "This Google account can't open that file (check the link, or that it's shared with you)." });
+      /* admin */
+      case "checkKey": return json({ ok: isAdmin(data.key) });
+      case "getConfig": {
+        if (!isAdmin(data.key)) return json({ ok: false, error: "Unauthorized" });
+        const c = readConfigFromSheet();
+        return json({ ok: true, config: c.config, updatedAt: c.updatedAt });
+      }
+      case "saveConfig": return json(saveConfig(data));
+      case "listSubmissions": case "listReviews": {
+        if (!isAdmin(data.key)) return json({ ok: false, error: "Unauthorized" });
+        const subs = data.action === "listSubmissions";
+        const cols = subs ? COLUMNS : REVIEW_COLUMNS, s = sheet(subs ? SUB_SHEET : REVIEW_SHEET);
+        const rows = s.getLastRow() > 1 ? s.getRange(2, 1, s.getLastRow() - 1, cols.length).getValues() : [];
+        return json({ ok: true, columns: cols, rows: rows });
+      }
+      case "translate": {
+        if (!isAdmin(data.key)) return json({ ok: false, error: "Unauthorized" });
+        return json({ ok: true, results: translateItems(data.items || [], data.source || "en", String(data.target || "")) });
+      }
+      case "driveFileInfo": {
+        if (!isAdmin(data.key)) return json({ ok: false, error: "Unauthorized" });
+        try {
+          const f = DriveApp.getFileById(String(data.id));
+          let publicLink = false;
+          try { const a = f.getSharingAccess(); publicLink = (a === DriveApp.Access.ANYONE_WITH_LINK || a === DriveApp.Access.ANYONE); } catch (_) {}
+          return json({ ok: true, name: f.getName(), size: f.getSize(), mime: f.getMimeType(), publicLink: publicLink });
+        } catch (err) {
+          return json({ ok: false, error: "This Google account can't open that file (check the link, or that it's shared with you)." });
+        }
+      }
+      case "uploadImage": {
+        // Saved to a Drive folder next to this sheet, shared read-only by link, served back as a direct image URL.
+        if (!isAdmin(data.key)) return json({ ok: false, error: "Unauthorized" });
+        if (!data.data || !/^image\//.test(data.mime || "")) return json({ ok: false, error: "Not an image" });
+        const safeName = String(data.name || "image").replace(/[^\w.\-]+/g, "_").slice(0, 80);
+        const file = imageFolder().createFile(Utilities.newBlob(Utilities.base64Decode(data.data), data.mime, safeName));
+        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+        return json({ ok: true, id: file.getId(), url: "https://lh3.googleusercontent.com/d/" + file.getId(), name: file.getName() });
       }
     }
-
-    // Image upload from admin.html: saved to a Drive folder next to this sheet, shared read-only
-    // by link, and served back as a direct image URL for the course page.
-    if (data.action === "uploadImage") {
-      if (!isAdmin(data.key)) return json({ ok: false, error: "Unauthorized" });
-      if (!data.data || !/^image\//.test(data.mime || "")) return json({ ok: false, error: "Not an image" });
-      const folder = imageFolder();
-      const safeName = String(data.name || "image").replace(/[^\w.\-]+/g, "_").slice(0, 80);
-      const blob = Utilities.newBlob(Utilities.base64Decode(data.data), data.mime, safeName);
-      const file = folder.createFile(blob);
-      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-      return json({ ok: true, id: file.getId(), url: "https://lh3.googleusercontent.com/d/" + file.getId(), name: file.getName() });
-    }
-
-    // End-of-course review: rating 1–5 required, comment optional
-    if (data.type === "review") {
-      const rating = Number(data.rating);
-      if (!(rating >= 1 && rating <= 5 && Math.round(rating) === rating)) return json({ ok: false, error: "Rating must be 1–5" });
-      const r = sheet(REVIEW_SHEET);
-      if (r.getLastRow() === 0) { r.appendRow(REVIEW_COLUMNS); r.getRange(1, 1, 1, REVIEW_COLUMNS.length).setFontWeight("bold"); r.setFrozenRows(1); }
-      else if (r.getLastColumn() < REVIEW_COLUMNS.length) r.getRange(1, 1, 1, REVIEW_COLUMNS.length).setValues([REVIEW_COLUMNS]).setFontWeight("bold");
-      const row = Object.assign({}, data, { rating: rating, comment: String(data.comment || "").slice(0, 2000) });
-      // Prefix values that a spreadsheet would treat as formulas, so a comment can't run as one.
-      r.appendRow(REVIEW_COLUMNS.map(k => { const v = (k in row) ? row[k] : ""; return (typeof v === "string" && /^[=+\-@]/.test(v)) ? "'" + v : v; }));
-      return json({ ok: true });
-    }
-
-    // Default: log a quiz submission
-    const s = sheet(SUB_SHEET);
-    if (s.getLastRow() === 0) {
-      s.appendRow(COLUMNS);
-      s.getRange(1, 1, 1, COLUMNS.length).setFontWeight("bold");
-      s.setFrozenRows(1);
-    } else if (s.getLastColumn() < COLUMNS.length) {
-      s.getRange(1, 1, 1, COLUMNS.length).setValues([COLUMNS]).setFontWeight("bold");   // add new columns to an older sheet
-    }
-    s.appendRow(COLUMNS.map(k => { const v = (k in data) ? data[k] : ""; return (typeof v === "string" && /^[=+\-@]/.test(v)) ? "'" + v : v; }));
-    return json({ ok: true });
+    return json({ ok: false, error: "Unknown request" });
   } catch (err) {
     return json({ ok: false, error: String(err) });
-  } finally {
-    lock.releaseLock();
   }
+}
+
+function saveConfig(data) {
+  if (!isAdmin(data.key)) return { ok: false, error: "Unauthorized" };
+  if (!data.config || !Array.isArray(data.config.segments)) return { ok: false, error: "Invalid config" };
+  const lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    const s = sheet(CFG_SHEET);
+    if (s.getLastRow() === 0) { s.appendRow(["courseJson", "updatedAt"]); s.getRange(1,1,1,2).setFontWeight("bold"); }
+    const now = new Date().toISOString();
+    const text = JSON.stringify(data.config);
+    const parts = [];
+    for (let i = 0; i < text.length; i += CHUNK) parts.push([text.slice(i, i + CHUNK)]);
+    if (s.getLastRow() >= 2) s.getRange(2, 1, s.getLastRow() - 1, 2).clearContent();
+    s.getRange(2, 1, parts.length, 1).setNumberFormat("@").setValues(parts);
+    s.getRange("B2").setValue(now);
+    cacheConfig(text, now);   // learners get the new version straight away
+    _cfgMemo = null;
+    return { ok: true, updatedAt: now, cells: parts.length };
+  } finally { lock.releaseLock(); }
+}
+
+/* ---------- learner flow ---------- */
+const str = (v, max) => String(v == null ? "" : v).trim().slice(0, max || 200);
+function startSession(d) {
+  const cfg = getConfig().config;
+  if (!cfg || !(cfg.segments || []).length) return { ok: false, error: "not_published" };
+  const name = str(d.name), email = str(d.email), qualifying = str(d.qualifying), student = str(d.student);
+  if (!name || !qualifying || !student || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, error: "missing_fields" };
+  const token = Utilities.getUuid();
+  const now = Date.now();
+  putSession(token, { name, email, qualifying, student, lang: str(d.lang, 10) || "en", p: 0, att: {}, dl: { 0: now }, rev: false });
+  return { ok: true, token, progress: 0, count: cfg.segments.length, section: publicSection(cfg, 0) };
+}
+function resumeSession(d) {
+  const s = getSession(d.token); if (!s) return { ok: false, error: "expired" };
+  const cfg = getConfig().config; if (!cfg) return { ok: false, error: "not_published" };
+  const count = cfg.segments.length;
+  if (s.p < count) { s.dl[s.p] = s.dl[s.p] || Date.now(); putSession(d.token, s); }
+  return { ok: true, progress: s.p, count, name: s.name, email: s.email, qualifying: s.qualifying, student: s.student, reviewed: !!s.rev,
+           section: s.p < count ? publicSection(cfg, s.p) : null };
+}
+function gradeAnswer(d) {
+  const s = getSession(d.token); if (!s) return { ok: false, error: "expired" };
+  const cfg = getConfig().config; if (!cfg) return { ok: false, error: "not_published" };
+  const i = Number(d.index), count = cfg.segments.length;
+  if (i !== s.p || i >= count) return { ok: false, error: "out_of_order", progress: s.p };
+  const seg = cfg.segments[i];
+  const questions = seg.noQuiz ? [] : (seg.questions || []);
+  const answers = Array.isArray(d.answers) ? d.answers.map(Number) : [];
+  const results = questions.map((q, k) => answers[k] === q.answer);
+  const correct = results.filter(Boolean).length, total = questions.length;
+  const passed = !questions.length || cfg.requireAllCorrect === false || correct === total;
+  s.att[i] = (s.att[i] || 0) + 1;
+  if (d.lang) s.lang = str(d.lang, 10);
+  const now = new Date();
+  appendRow(SUB_SHEET, COLUMNS, {
+    submittedAt: now.toISOString(), submittedAtLocal: localStamp(now), name: s.name, email: s.email, course: cfg.courseTitle,
+    segment: i + 1, segmentTitle: seg.title, attempt: s.att[i], score: questions.length ? correct + "/" + total : "viewed", passed: passed,
+    answers: questions.length ? questions.map((q, k) => (q.options || [])[answers[k]] || "").join(" | ") : "(no quiz)",
+    secondsOnSegment: s.dl[i] ? Math.round((now.getTime() - s.dl[i]) / 1000) : "",
+    completedCourse: passed && i === count - 1, language: s.lang, qualifyingParent: s.qualifying, studentName: s.student
+  });
+  if (passed) { s.p = i + 1; if (s.p < count) s.dl[s.p] = now.getTime(); }
+  putSession(d.token, s);
+  const out = { ok: true, passed, correct, total, results, completed: passed && s.p >= count,
+                next: passed && s.p < count ? publicSection(cfg, s.p) : null };
+  if (!passed && cfg.revealCorrect) out.reveal = questions.map(q => q.answer);   // admin chose to show answers after a miss
+  return out;
+}
+function saveReview(d) {
+  const s = getSession(d.token); if (!s) return { ok: false, error: "expired" };
+  const cfg = getConfig().config; if (!cfg) return { ok: false, error: "not_published" };
+  if (s.p < cfg.segments.length) return { ok: false, error: "not_finished" };
+  if (s.rev) return { ok: true, duplicate: true };
+  const rating = Number(d.rating);
+  if (!(rating >= 1 && rating <= 5 && Math.round(rating) === rating)) return { ok: false, error: "Rating must be 1–5" };
+  const now = new Date();
+  appendRow(REVIEW_SHEET, REVIEW_COLUMNS, {
+    submittedAt: now.toISOString(), submittedAtLocal: localStamp(now), name: s.name, email: s.email, course: cfg.courseTitle,
+    rating: rating, comment: str(d.comment, 2000), language: str(d.lang, 10) || s.lang, qualifyingParent: s.qualifying, studentName: s.student
+  });
+  s.rev = true; putSession(d.token, s);
+  return { ok: true };
 }
 
 /* ---------- Translation (Google Translate via LanguageApp) ---------- */

@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
 <title>Training Course</title>
 <link rel="stylesheet" href="https://use.typekit.net/vvm7dvi.css">
 <style>
@@ -160,6 +161,7 @@
       <label for="student" data-ui="studentName">Student Name</label>
       <input type="text" id="student" required autocomplete="off" placeholder="Student's first and last name" data-ui-ph="studentPh">
       <button class="btn" type="submit" data-ui="start">Start course</button>
+      <div class="status" id="startStatus" role="status"></div>
     </form>
   </section>
 
@@ -199,6 +201,14 @@
     <button type="button" class="lb-nav next" id="lbNext" aria-label="Next">&#8250;</button>
     <div class="lb-count" id="lbCount"></div>
   </div>
+
+  <!-- Shown instead of the course if it can't be loaded (never falls back to placeholder content) -->
+  <section class="card hidden" id="errorCard">
+    <div class="eyebrow" data-ui="errEyebrow">Something went wrong</div>
+    <h2 id="errTitle"></h2>
+    <p class="note" id="errBody"></p>
+    <button class="btn" type="button" id="retryBtn" data-ui="retry">Try again</button>
+  </section>
 
   <!-- Review: required 1–5 rating + optional comments -->
   <section class="card hidden" id="reviewCard">
@@ -315,7 +325,11 @@ const UI = {
   noSkip:"Skipping ahead isn't allowed — please keep watching.",
   reviewEyebrow:"One last step", ratingLegend:"Rating from 1 to 5", ratingLow:"Poor", ratingHigh:"Excellent",
   commentsLabel:"Comments", optional:"(optional)", submitReview:"Submit review", ratingRequired:"Please choose a rating from 1 to 5.",
-  sendingReview:"Sending…"
+  sendingReview:"Sending…", starting:"Starting…", checking:"Checking your answers…",
+  netError:"Couldn't reach the server. Check your connection, then try again.", missingFields:"Please fill in every field with a valid email address.",
+  sessionExpired:"Your session timed out. Please sign in again to continue.", errEyebrow:"Something went wrong", retry:"Try again",
+  loadFailTitle:"We couldn't load the course", loadFailBody:"Please check your internet connection and try again in a minute.",
+  notPublishedTitle:"This course isn't available yet", notPublished:"Please check back later."
 };
 const LANG_NAMES = { en:"English", es:"Español", ht:"Kreyòl ayisyen", pt:"Português", fr:"Français", vi:"Tiếng Việt", "zh-CN":"中文（简体）",
   "zh-TW":"中文（繁體）", tl:"Tagalog", ar:"العربية", ru:"Русский", ko:"한국어", de:"Deutsch", it:"Italiano", ja:"日本語", pl:"Polski", uk:"Українська", hi:"हिन्दी" };
@@ -363,12 +377,12 @@ $("langPick").addEventListener("change", e => {
 
 function renderProgress(){
   const p = $("progress"); p.innerHTML = "";
-  CONFIG.segments.forEach((_, i) => {
+  for (let i = 0; i < segCount(); i++) {
     const s = document.createElement("span");
     if (i < state.idx) s.className = "done";
     else if (i === state.idx && state.name) s.className = "current";
     p.appendChild(s);
-  });
+  }
 }
 
 function showSegment(i){
@@ -403,7 +417,7 @@ function localizeSegment(keepAnswers){
   const i = state.idx, seg = CONFIG.segments[i]; if (!seg) return;
   const st = segKind(seg);
   $("segTitle").textContent = segT(seg, "title");
-  $("segCount").textContent = ui("sectionOf", { n: i + 1, total: CONFIG.segments.length });
+  $("segCount").textContent = ui("sectionOf", { n: i + 1, total: segCount() });
   $("videoNote").textContent = state.noteKey ? ui(state.noteKey) : "";
   if (st === "text") $("textBody").innerHTML = sanitize(segT(seg, "body"));
   else renderNotes(seg);
@@ -431,7 +445,7 @@ function renderQuiz(seg, keepAnswers){
   });
   if (marks) [...f.querySelectorAll("label.opt")].forEach((l, k) => { if (marks[k]) l.className = marks[k]; });
   const btn = document.createElement("button"); btn.className="btn"; btn.type="submit";
-  const last = state.idx === CONFIG.segments.length - 1;
+  const last = state.idx === segCount() - 1;
   btn.textContent = ui(noQuiz ? (last ? "finish" : "cont") : (last ? "submitFinish" : "submitContinue"));
   f.appendChild(btn);
 }
@@ -857,69 +871,133 @@ $("sameAsParent").addEventListener("change", e => {
   if (e.target.checked) { q.value = $("name").value; q.readOnly = true; } else { q.readOnly = false; q.focus(); }
 });
 $("name").addEventListener("input", () => { if ($("sameAsParent").checked) $("qualifying").value = $("name").value; });
-$("startForm").addEventListener("submit", e => {
+/* ---------------- talking to the backend ----------------
+   Live course ("server mode"): the backend holds the correct answers. The course gets one section at a time
+   (questions without answers), sends the learner's choices, and the backend grades and records them.
+   Admin "Preview course" and local testing ("local mode") grade in the browser from the draft instead. */
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const SESSION_KEY = "courseSession";
+const serverMode = () => !!CONFIG.logEndpoint && !state.preview;
+const segCount = () => CONFIG.count != null ? CONFIG.count : CONFIG.segments.length;
+// POST with automatic retries: Apps Script occasionally sheds load or returns an error page under bursts.
+async function call(body, tries = 3){
+  let lastErr = null;
+  for (let k = 0; k < tries; k++) {
+    try {
+      const r = await fetch(CONFIG.logEndpoint, { method:"POST", headers:{ "Content-Type":"text/plain" }, body: JSON.stringify(body) });
+      return await r.json();
+    } catch (err) { lastErr = err; if (k < tries - 1) await sleep(900 * (k + 1) + Math.random() * 600); }
+  }
+  throw lastErr || new Error("network");
+}
+async function getJSON(url, tries = 3){
+  let lastErr = null;
+  for (let k = 0; k < tries; k++) {
+    try { const r = await fetch(url); return await r.json(); }
+    catch (err) { lastErr = err; if (k < tries - 1) await sleep(900 * (k + 1) + Math.random() * 600); }
+  }
+  throw lastErr || new Error("network");
+}
+function mergeTx(tx){
+  CONFIG.translations = CONFIG.translations || {};
+  Object.keys(tx || {}).forEach(l => { CONFIG.translations[l] = Object.assign(CONFIG.translations[l] || {}, tx[l]); });
+}
+function storeSection(i, sec){ if (!sec) return; mergeTx(sec.tx); delete sec.tx; CONFIG.segments[i] = sec; }
+function saveSession(){ try { sessionStorage.setItem(SESSION_KEY, JSON.stringify({ token: state.token, name: state.name, student: state.student })); } catch(_){} }
+function clearSession(){ state.token = null; try { sessionStorage.removeItem(SESSION_KEY); } catch(_){} }
+function showError(titleKey, bodyKey, canRetry){
+  ["startCard","segmentCard","reviewCard","doneCard"].forEach(id => $(id).classList.add("hidden"));
+  $("errTitle").textContent = ui(titleKey); $("errBody").textContent = ui(bodyKey);
+  $("retryBtn").classList.toggle("hidden", !canRetry);
+  $("errorCard").classList.remove("hidden");
+}
+$("retryBtn").addEventListener("click", () => location.reload());
+function showSignIn(noticeKey){
+  ["errorCard","segmentCard","reviewCard","doneCard"].forEach(id => $(id).classList.add("hidden"));
+  // Pre-fill what we already know so a timed-out learner only has to press Start again.
+  [["name", state.name], ["email", state.email], ["qualifying", state.qualifying], ["student", state.student]].forEach(([id, v]) => { if (v && !$(id).value) $(id).value = v; });
+  $("startCard").classList.remove("hidden");
+  $("startStatus").innerHTML = noticeKey ? `<span class="feedback bad">${esc(ui(noticeKey))}</span>` : "";
+}
+function afterLastSection(){ if (CONFIG.reviewEnabled !== false) showReview(); else finish(); }
+
+/* ---------------- sign in ---------------- */
+$("startForm").addEventListener("submit", async e => {
   e.preventDefault();
   state.name = $("name").value.trim(); state.email = $("email").value.trim();
   state.qualifying = $("qualifying").value.trim(); state.student = $("student").value.trim();
   if (!state.name || !state.email || !state.qualifying || !state.student) return;
+  if (serverMode()) {
+    const btn = $("startForm").querySelector("button[type=submit]"); btn.disabled = true; $("startStatus").textContent = ui("starting");
+    let r = null;
+    try { r = await call({ action:"start", name: state.name, email: state.email, qualifying: state.qualifying, student: state.student, lang: LANG }); }
+    catch (_) { btn.disabled = false; $("startStatus").innerHTML = `<span class="feedback bad">${esc(ui("netError"))}</span>`; return; }
+    btn.disabled = false;
+    if (!r.ok) { $("startStatus").innerHTML = `<span class="feedback bad">${esc(ui(r.error === "missing_fields" ? "missingFields" : r.error === "not_published" ? "notPublished" : "netError"))}</span>`; return; }
+    state.token = r.token; CONFIG.count = r.count; storeSection(0, r.section); saveSession();
+    $("startStatus").textContent = "";
+  }
   $("who").textContent = `${state.student} · ${state.name}`;
   showSegment(0);
 });
 
+/* ---------------- quiz submit ---------------- */
+function markResults(form, questions, answers, results, reveal){
+  questions.forEach((qu, qi) => {
+    form.querySelectorAll(`input[name=q${qi}]`).forEach(inp => {
+      const lab = inp.parentElement; lab.classList.remove("correct","wrong");
+      if (Number(inp.value) === answers[qi]) lab.classList.add(results[qi] ? "correct" : "wrong");
+      else if (reveal && Number(inp.value) === reveal[qi]) lab.classList.add("correct");
+    });
+  });
+}
 $("quizForm").addEventListener("submit", async e => {
   e.preventDefault();
   if (!state.watched) return;
-  const seg = CONFIG.segments[state.idx];
-  state.attempts++;
-  const noQuiz = isNoQuiz(seg);
-  const questions = noQuiz ? [] : seg.questions;
-  const answers = questions.map((_, qi) => Number(new FormData(e.target).get(`q${qi}`)));
-  const results = answers.map((a, qi) => a === questions[qi].answer);
-  const correct = results.filter(Boolean).length, total = questions.length;
-  const passed = noQuiz ? true : (CONFIG.requireAllCorrect ? correct === total : true);
+  const form = e.target, seg = CONFIG.segments[state.idx];
+  const noQuiz = isNoQuiz(seg), questions = noQuiz ? [] : seg.questions;
+  const answers = questions.map((_, qi) => Number(new FormData(form).get(`q${qi}`)));
+  const btn = form.querySelector("button"); btn.disabled = true;
+  $("status").textContent = ui(noQuiz ? "recordingShort" : "checking");
+  let passed, correct, total, results, reveal = null, next = null, completed = false;
 
-  // Mark options
-  questions.forEach((qu, qi) => {
-    const labs = e.target.querySelectorAll(`input[name=q${qi}]`);
-    labs.forEach((inp) => {
-      const lab = inp.parentElement; lab.classList.remove("correct","wrong");
-      if (Number(inp.value) === answers[qi]) lab.classList.add(results[qi] ? "correct" : "wrong");
-      else if (CONFIG.revealCorrect && Number(inp.value) === qu.answer) lab.classList.add("correct");
-    });
-  });
-
-  const entry = {
-    name: state.name, email: state.email, qualifyingParent: state.qualifying, studentName: state.student,
-    submittedAt: new Date().toISOString(),
-    submittedAtLocal: new Date().toLocaleString(),
-    course: CONFIG.courseTitle,
-    segment: state.idx + 1, segmentTitle: seg.title,
-    attempt: state.attempts, score: noQuiz ? "viewed" : `${correct}/${total}`, passed,
-    answers: noQuiz ? "(no quiz)" : answers.map((a, qi) => questions[qi].options[a] ?? "").join(" | "),
-    secondsOnSegment: Math.round((Date.now() - state.startedAt.getTime())/1000),
-    completedCourse: passed && state.idx === CONFIG.segments.length - 1,
-    language: LANG
-  };
-  state.log.push(entry);
-  const btn = e.target.querySelector("button"); btn.disabled = true;
-  $("status").textContent = ui(noQuiz ? "recordingShort" : "recording");
-  await logSubmission(entry);
+  if (serverMode()) {
+    let r;
+    try { r = await call({ action:"answer", token: state.token, index: state.idx, answers, lang: LANG }); }
+    catch (_) { btn.disabled = false; $("status").innerHTML = `<span class="feedback bad">${esc(ui("netError"))}</span>`; return; }
+    if (!r.ok) {
+      btn.disabled = false;
+      if (r.error === "expired") { clearSession(); destroyPlayers(); showSignIn("sessionExpired"); return; }
+      if (r.error === "out_of_order") { await resumeFromServer(); return; }
+      $("status").innerHTML = `<span class="feedback bad">${esc(ui("netError"))}</span>`; return;
+    }
+    ({ passed, correct, total, results } = r); reveal = r.reveal || null; next = r.next; completed = r.completed;
+  } else {
+    state.attempts++;
+    results = answers.map((a, qi) => a === questions[qi].answer);
+    correct = results.filter(Boolean).length; total = questions.length;
+    passed = noQuiz ? true : (CONFIG.requireAllCorrect ? correct === total : true);
+    if (CONFIG.revealCorrect && !passed) reveal = questions.map(q => q.answer);
+    completed = passed && state.idx === segCount() - 1;
+    logLocal({ name: state.name, email: state.email, qualifyingParent: state.qualifying, studentName: state.student,
+      submittedAt: new Date().toISOString(), segment: state.idx + 1, segmentTitle: seg.title, attempt: state.attempts,
+      score: noQuiz ? "viewed" : `${correct}/${total}`, passed, answers: noQuiz ? "(no quiz)" : answers.map((a, qi) => questions[qi].options[a] ?? "").join(" | "),
+      completedCourse: completed, language: LANG });
+  }
   btn.disabled = false;
-
+  markResults(form, questions, answers, results, reveal);
   if (passed) {
+    if (next) storeSection(state.idx + 1, next);
     $("status").innerHTML = noQuiz ? "" : `<span class="feedback ok">${esc(ui("correct", { score: `${correct}/${total}` }))}</span>`;
-    setTimeout(() => {
-      if (state.idx + 1 < CONFIG.segments.length) showSegment(state.idx + 1);
-      else if (CONFIG.reviewEnabled !== false) showReview();
-      else finish();
-    }, noQuiz ? 150 : 900);
+    setTimeout(() => { if (state.idx + 1 < segCount()) showSegment(state.idx + 1); else afterLastSection(); }, noQuiz ? 150 : 900);
   } else {
     $("status").innerHTML = `<span class="feedback bad">${esc(ui("tryAgain", { score: `${correct}/${total}` }))}</span>`;
   }
 });
 
+/* ---------------- review ---------------- */
 function showReview(){
-  state.idx = CONFIG.segments.length; renderProgress(); destroyPlayers();
+  state.idx = segCount(); renderProgress(); destroyPlayers();
   $("segmentCard").classList.add("hidden"); $("reviewCard").classList.remove("hidden");
   localizeReview();
   scrollToCourseTop();
@@ -941,30 +1019,30 @@ $("reviewForm").addEventListener("submit", async e => {
     return;
   }
   const btn = $("reviewForm").querySelector("button"); btn.disabled = true; $("reviewStatus").textContent = ui("sendingReview");
-  const now = new Date();
-  await logSubmission({ type: "review", name: state.name, email: state.email, qualifyingParent: state.qualifying, studentName: state.student, submittedAt: now.toISOString(), submittedAtLocal: now.toLocaleString(),
-    course: CONFIG.courseTitle, rating: Number(picked.value), comment: $("reviewComment").value.trim(), language: LANG });
+  const rating = Number(picked.value), comment = $("reviewComment").value.trim();
+  if (serverMode()) {
+    let r;
+    try { r = await call({ action:"review", token: state.token, rating, comment, lang: LANG }); }
+    catch (_) { btn.disabled = false; $("reviewStatus").innerHTML = `<span class="feedback bad">${esc(ui("netError"))}</span>`; return; }
+    if (!r.ok && r.error === "expired") { clearSession(); finish(); return; }   // course already recorded as complete
+    if (!r.ok) { btn.disabled = false; $("reviewStatus").innerHTML = `<span class="feedback bad">${esc(ui("netError"))}</span>`; return; }
+  } else {
+    logLocal({ type: "review", name: state.name, email: state.email, qualifyingParent: state.qualifying, studentName: state.student,
+      submittedAt: new Date().toISOString(), rating, comment, language: LANG });
+  }
   $("reviewCard").classList.add("hidden");
   finish();
 });
 
 function finish(){
-  state.idx = CONFIG.segments.length; renderProgress();
-  $("segmentCard").classList.add("hidden"); $("reviewCard").classList.add("hidden"); $("doneCard").classList.remove("hidden");
+  state.idx = segCount(); renderProgress();
+  ["segmentCard","reviewCard","startCard"].forEach(id => $(id).classList.add("hidden")); $("doneCard").classList.remove("hidden");
   $("doneTitle").textContent = tr("c:doneTitle", CONFIG.doneTitle); $("doneNote").textContent = tr("c:doneNote", CONFIG.doneNote);
-  // Tell a parent page (e.g. Squarespace) that the course finished, if embedded in an iframe.
-  postParent({ type: "course-complete" });
+  clearSession();
+  postParent({ type: "course-complete" });   // lets a host page react; no personal details
 }
-
-async function logSubmission(entry){
-  // Always keep a local copy (handy for debugging; visible via localStorage "courseLog").
-  try { const l = JSON.parse(localStorage.getItem("courseLog")||"[]"); l.push(entry); localStorage.setItem("courseLog", JSON.stringify(l)); } catch(_){}
-  if (!CONFIG.logEndpoint) return;
-  try {
-    // text/plain avoids a CORS preflight, which Apps Script web apps do not answer.
-    await fetch(CONFIG.logEndpoint, { method:"POST", mode:"no-cors", headers:{ "Content-Type":"text/plain" }, body: JSON.stringify(entry) });
-  } catch(err) { console.warn("Log failed", err); }
-}
+// Local mode only (preview / testing): keep a copy in this browser instead of sending anywhere.
+function logLocal(entry){ try { const l = JSON.parse(localStorage.getItem("courseLog") || "[]"); l.push(entry); localStorage.setItem("courseLog", JSON.stringify(l)); } catch(_){} }
 
 /* ---------------- embedding: auto-height bridge ----------------
    When the course sits in an <iframe> on another site, it reports its height to the host page, which
@@ -1003,31 +1081,45 @@ if (EMBEDDED) {
   reportHeight();
 }
 
-// Init: fetch the published course content, then render.
-async function loadRemoteConfig(){
-  // Preview mode: admin.html passes its unpublished draft via sessionStorage.
-  if (new URLSearchParams(location.search).get("preview") === "1") {
-    try {
-      const draft = JSON.parse(sessionStorage.getItem("coursePreviewConfig") || "null");
-      if (draft) { CONFIG = Object.assign({}, CONFIG, draft, { logEndpoint: "" }); state.preview = true; return; }
-    } catch(_){}
-  }
-  if (!CONFIG.logEndpoint) return;
-  try {
-    const r = await fetch(CONFIG.logEndpoint + "?action=config&t=" + Date.now());
-    const data = await r.json();
-    if (data.ok && data.config && Array.isArray(data.config.segments) && data.config.segments.length) {
-      CONFIG = Object.assign({}, CONFIG, data.config, { logEndpoint: CONFIG.logEndpoint });
-    }
-  } catch (err) { console.warn("Using built-in course content; backend unreachable:", err); }
+// Init
+async function resumeFromServer(){
+  let r;
+  try { r = await call({ action:"resume", token: state.token }); } catch (_) { showError("loadFailTitle", "loadFailBody", true); return; }
+  if (!r.ok) { clearSession(); showSignIn(r.error === "expired" ? "sessionExpired" : null); return; }
+  state.name = r.name; state.email = r.email || ""; state.qualifying = r.qualifying || ""; state.student = r.student; CONFIG.count = r.count;
+  $("who").textContent = `${state.student} · ${state.name}`;
+  if (r.section) { storeSection(r.progress, r.section); showSegment(r.progress); }
+  else if (!r.reviewed && CONFIG.reviewEnabled !== false) showReview();
+  else finish();
 }
 (async () => {
   $("courseIntro").textContent = UI.loading;
-  await loadRemoteConfig();
+  // Preview mode: admin.html passes its unpublished draft via sessionStorage; it's graded in the browser.
+  if (new URLSearchParams(location.search).get("preview") === "1") {
+    try { const draft = JSON.parse(sessionStorage.getItem("coursePreviewConfig") || "null"); if (draft) { CONFIG = Object.assign({}, CONFIG, draft, { logEndpoint: "" }); state.preview = true; } } catch(_){}
+  }
+  if (serverMode()) {
+    // Live course: only the course shell (titles, settings, interface text) loads up front.
+    let r = null;
+    try { r = await getJSON(CONFIG.logEndpoint + "?action=shell&t=" + Date.now()); } catch (_) {}
+    if (!r || !r.ok) {
+      CONFIG = { logEndpoint: CONFIG.logEndpoint, courseTitle: "", intro: "", segments: [], count: 0, translations: {} };   // nothing from the built-in demo
+      initLanguages(); applyStatic();
+      if (r && r.error === "not_published") showError("notPublishedTitle", "notPublished", false);
+      else showError("loadFailTitle", "loadFailBody", true);
+      return;
+    }
+    const shell = r.shell, endpoint = CONFIG.logEndpoint;
+    CONFIG = Object.assign({ logEndpoint: endpoint, translations: {} }, shell, { segments: new Array(shell.count), count: shell.count });
+  }
   state.ccOn = CONFIG.captionsOn !== false;
   initLanguages();
   applyStatic();
   renderProgress();
+  if (serverMode()) {
+    let saved = null; try { saved = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null"); } catch(_){}
+    if (saved && saved.token) { state.token = saved.token; await resumeFromServer(); }   // refresh mid-course: pick up where they left off
+  }
 })();
 </script>
 </body>

@@ -46,6 +46,14 @@ Images uploaded in the dashboard are stored in a Google Drive folder named "<She
 - Course: `https://buffalo-stampeders.github.io/HERD-Meeting/course.html`
 - Admin: `https://buffalo-stampeders.github.io/HERD-Meeting/admin.html`
 
+## Security and reliability
+
+- **Answers stay on the server.** The course receives questions without the correct answers; the Apps Script backend grades each attempt and writes the result to the sheet itself, so answers can't be read from the page and pass/fail results can't be faked.
+- **One section at a time.** A learner receives a section only after passing the previous one (tracked in a 6-hour session). Refreshing the page resumes where they left off.
+- **Admin-only data needs the key**, sent in the request body (never in the URL): full course, submissions, reviews, publishing, uploads, translation.
+- **Search engines and AI crawlers** are asked not to index the course or dashboard (`noindex` tags). This is a request, not a lock.
+- **Built for self-paced use.** The published course is cached by the backend, requests retry automatically, and if the course can't load the learner sees a "try again" screen instead of placeholder content. Apps Script handles dozens of simultaneous learners comfortably; a single event with 1,000+ people starting at the same moment would need a different backend.
+
 ## Embed on the website
 
 Paste the contents of [`embed-snippet.html`](embed-snippet.html) into a Code / HTML block on the site. The frame resizes to fit the course (no inner scrollbar), moving to the next section scrolls the page back to the top of the course, and enlarged images open in the visible part of the page. Set `HEADER_OFFSET` in the snippet to the height of the site's sticky header.

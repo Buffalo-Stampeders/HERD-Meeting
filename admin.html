@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet, noimageindex">
 <title>Course Admin</title>
 <link rel="stylesheet" href="https://use.typekit.net/vvm7dvi.css">
 <style>
@@ -350,7 +351,7 @@ async function verify(endpoint, key){
 }
 
 /* ---- login gate ---- */
-const REQUIRED_BACKEND = 6;
+const REQUIRED_BACKEND = 7;
 async function checkBackend(){
   let v = 0;
   try { const r = await fetch(conn.endpoint + "?action=version&t=" + Date.now()); const t = await r.text(); try { v = JSON.parse(t).version || 0; } catch (_) { v = 0; } }
@@ -405,7 +406,7 @@ async function connect(){
 async function loadConfig(){
   setMsg("Loading course…");
   try {
-    const data = await api({ action:"config" });
+    const data = await api({}, { action:"getConfig", key: conn.key });
     if (data.ok && data.config) {
       config = data.config;
       setMsg("Loaded. Last published " + (data.updatedAt ? new Date(data.updatedAt).toLocaleString() : "—") + ".", "ok");
@@ -695,7 +696,11 @@ const UI = {
   noSkip:"Skipping ahead isn't allowed — please keep watching.",
   reviewEyebrow:"One last step", ratingLegend:"Rating from 1 to 5", ratingLow:"Poor", ratingHigh:"Excellent",
   commentsLabel:"Comments", optional:"(optional)", submitReview:"Submit review", ratingRequired:"Please choose a rating from 1 to 5.",
-  sendingReview:"Sending…"
+  sendingReview:"Sending…", starting:"Starting…", checking:"Checking your answers…",
+  netError:"Couldn't reach the server. Check your connection, then try again.", missingFields:"Please fill in every field with a valid email address.",
+  sessionExpired:"Your session timed out. Please sign in again to continue.", errEyebrow:"Something went wrong", retry:"Try again",
+  loadFailTitle:"We couldn't load the course", loadFailBody:"Please check your internet connection and try again in a minute.",
+  notPublishedTitle:"This course isn't available yet", notPublished:"Please check back later."
 };
 const LANG_NAMES = { en:"English", es:"Español", ht:"Kreyòl ayisyen", pt:"Português", fr:"Français", vi:"Tiếng Việt", "zh-CN":"中文（简体）",
   "zh-TW":"中文（繁體）", tl:"Tagalog", ar:"العربية", ru:"Русский", ko:"한국어", de:"Deutsch", it:"Italiano", ja:"日本語", pl:"Polski", uk:"Українська", hi:"हिन्दी" };
@@ -1182,7 +1187,7 @@ function download(name, text, type){
 async function loadSubmissions(){
   $("noSubs").classList.add("hidden");
   try {
-    const r = await api({ action:"submissions", key: conn.key });
+    const r = await api({}, { action:"listSubmissions", key: conn.key });
     if (!r.ok) { setMsg("Could not load submissions: " + r.error, "bad"); return; }
     subs = r; renderSubs();
   } catch(err) { setMsg("Could not load submissions — backend unreachable.", "bad"); }
@@ -1233,7 +1238,7 @@ $("csvBtn").addEventListener("click", () => {
 let revs = { columns: [], rows: [] };
 async function loadReviews(){
   try {
-    const r = await api({ action:"reviews", key: conn.key });
+    const r = await api({}, { action:"listReviews", key: conn.key });
     if (!r.ok) { $("revSummary").innerHTML = `<span class="hint">Reviews unavailable: ${esc(r.error || "update the Apps Script backend")}</span>`; return; }
     revs = r; renderReviews();
   } catch (err) { $("revSummary").innerHTML = `<span class="hint">Couldn't load reviews.</span>`; }
