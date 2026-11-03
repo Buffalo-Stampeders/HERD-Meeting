@@ -114,6 +114,12 @@
   #reviewCard textarea{width:100%;font:inherit;padding:11px 13px;border:1px solid var(--bronze);border-radius:3px;background:#fff;resize:vertical}
   #reviewCard .optional{font-weight:400;letter-spacing:0;text-transform:none;color:var(--muted)}
   .same-as{display:flex;align-items:center;gap:8px;margin:6px 0 2px}
+  .name-row{display:flex;gap:10px} .name-row input{flex:1;min-width:0}
+  @media (max-width:480px){ .name-row{flex-direction:column;gap:8px} }
+  .leave-note{font-size:13px;margin:16px 0 0}
+  .lang-box{display:flex;flex-direction:column;align-items:flex-end;gap:4px;max-width:300px}
+  .tx-note{margin:0;font-size:11px;line-height:1.35;color:var(--muted,#666);text-align:right}
+  @media (max-width:600px){ .lang-box{align-items:flex-start} .tx-note{text-align:left} }
   .same-as input{accent-color:var(--green);width:16px;height:16px;margin:0}
   .same-as label{margin:0;font-size:13px;font-weight:500;letter-spacing:0;text-transform:none;color:var(--ink);cursor:pointer}
   .header-right{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
@@ -139,7 +145,10 @@
   <div class="header">
     <h1 id="courseTitle">Training Course</h1>
     <div class="header-right">
-      <label class="lang-wrap hidden" id="langWrap"><span aria-hidden="true">&#127760;</span><select id="langPick" class="lang-pick" aria-label="Language"></select></label>
+      <div class="lang-box hidden" id="langBox">
+        <label class="lang-wrap" id="langWrap"><span aria-hidden="true">&#127760;</span><select id="langPick" class="lang-pick" aria-label="Language"></select></label>
+        <p class="tx-note" id="txNote" data-ui="translateNote">Translation provided by Google Translate. There may be unintended errors or exclusions.</p>
+      </div>
       <div class="who" id="who"></div>
     </div>
   </div>
@@ -151,15 +160,27 @@
     <h2 data-ui="beforeBegin">Before you begin</h2>
     <p class="note" id="courseIntro"></p>
     <form id="startForm" autocomplete="on">
-      <label for="name" data-ui="parentName">Parent/Guardian Name</label>
-      <input type="text" id="name" required autocomplete="name" placeholder="First and last name" data-ui-ph="namePh">
+      <label for="pFirst" data-ui="parentName">Parent/Guardian Name</label>
+      <div class="name-row">
+        <input type="text" id="pFirst" required autocomplete="given-name" placeholder="First name" data-ui-ph="firstName" data-ui-aria="firstName" aria-label="First name">
+        <input type="text" id="pLast" required autocomplete="family-name" placeholder="Last name" data-ui-ph="lastName" data-ui-aria="lastName" aria-label="Last name">
+      </div>
       <label for="email" data-ui="parentEmail">Parent/Guardian Email</label>
       <input type="email" id="email" required autocomplete="email" placeholder="you@example.com">
-      <label for="qualifying" data-ui="qualifyingName">Qualifying Parent/Guardian Name</label>
-      <input type="text" id="qualifying" required autocomplete="off" placeholder="First and last name" data-ui-ph="namePh">
+      <label for="parentId" data-ui="parentId">Parent ID Number</label>
+      <input type="text" id="parentId" required autocomplete="off" maxlength="40" spellcheck="false">
+      <label for="qFirst" data-ui="qualifyingName">Qualifying Parent/Guardian Name</label>
+      <div class="name-row">
+        <input type="text" id="qFirst" required autocomplete="off" placeholder="First name" data-ui-ph="firstName" data-ui-aria="firstName" aria-label="First name">
+        <input type="text" id="qLast" required autocomplete="off" placeholder="Last name" data-ui-ph="lastName" data-ui-aria="lastName" aria-label="Last name">
+      </div>
       <div class="same-as"><input type="checkbox" id="sameAsParent"><label for="sameAsParent" data-ui="sameAsParent">Same as the parent/guardian above</label></div>
-      <label for="student" data-ui="studentName">Student Name</label>
-      <input type="text" id="student" required autocomplete="off" placeholder="Student's first and last name" data-ui-ph="studentPh">
+      <label for="sFirst" data-ui="studentName">Student Name</label>
+      <div class="name-row">
+        <input type="text" id="sFirst" required autocomplete="off" placeholder="First name" data-ui-ph="firstName" data-ui-aria="firstName" aria-label="First name">
+        <input type="text" id="sLast" required autocomplete="off" placeholder="Last name" data-ui-ph="lastName" data-ui-aria="lastName" aria-label="Last name">
+      </div>
+      <p class="note leave-note" data-ui="stayNote">Please keep this page open until you finish. If you leave or close it before the end, your progress will be lost.</p>
       <button class="btn" type="submit" data-ui="start">Start course</button>
       <div class="status" id="startStatus" role="status"></div>
     </form>
@@ -311,9 +332,11 @@ const state = { name:"", email:"", idx:0, attempts:0, watched:false, startedAt:n
    made from. If the English has changed since (hash mismatch) the English is shown instead of a stale translation.
    Keep UI in sync with the copy in admin.html. */
 const UI = {
-  signIn:"Sign in", beforeBegin:"Before you begin", fullName:"Full name", namePh:"First and last name",
-  parentName:"Parent/Guardian Name", parentEmail:"Parent/Guardian Email", qualifyingName:"Qualifying Parent/Guardian Name",
-  studentName:"Student Name", sameAsParent:"Same as the parent/guardian above", studentPh:"Student's first and last name",
+  signIn:"Sign in", beforeBegin:"Before you begin", firstName:"First name", lastName:"Last name",
+  parentName:"Parent/Guardian Name", parentEmail:"Parent/Guardian Email", parentId:"Parent ID Number", qualifyingName:"Qualifying Parent/Guardian Name",
+  studentName:"Student Name", sameAsParent:"Same as the parent/guardian above",
+  translateNote:"Translation provided by Google Translate. There may be unintended errors or exclusions.",
+  stayNote:"Please keep this page open until you finish. If you leave or close it before the end, your progress will be lost.",
   email:"Email address", start:"Start course", loading:"Loading course…", sectionOf:"Section {n} of {total}",
   watchToUnlock:"Watch the full video to unlock the questions below.", watchToContinue:"Watch the full video to continue.",
   answerBelow:"Answer the questions below to continue.", videoDoneAnswer:"Video complete — answer the questions below.",
@@ -356,7 +379,7 @@ function initLanguages(){
   const nav = (navigator.languages || [navigator.language || "en"]).map(x => String(x).toLowerCase());
   LANG = (saved && options.includes(saved)) ? saved
        : (options.find(o => nav.some(n => n === o.toLowerCase())) || options.find(o => nav.some(n => n.split("-")[0] === o.split("-")[0].toLowerCase())) || "en");
-  $("langPick").value = LANG; $("langWrap").classList.remove("hidden");
+  $("langPick").value = LANG; $("langBox").classList.remove("hidden");
   applyLangAttrs();
 }
 function applyLangAttrs(){ document.documentElement.lang = LANG; document.documentElement.dir = RTL.has(LANG.split("-")[0]) ? "rtl" : "ltr"; }
@@ -366,6 +389,7 @@ function applyStatic(){
   $("courseIntro").textContent = tr("c:intro", CONFIG.intro);
   document.querySelectorAll("[data-ui]").forEach(el => el.textContent = ui(el.dataset.ui));
   document.querySelectorAll("[data-ui-ph]").forEach(el => el.placeholder = ui(el.dataset.uiPh));
+  document.querySelectorAll("[data-ui-aria]").forEach(el => el.setAttribute("aria-label", ui(el.dataset.uiAria)));
   if (state.preview && !state.name) $("who").textContent = ui("preview");
   if (!$("doneCard").classList.contains("hidden")) { $("doneTitle").textContent = tr("c:doneTitle", CONFIG.doneTitle); $("doneNote").textContent = tr("c:doneNote", CONFIG.doneNote); }
 }
@@ -867,11 +891,19 @@ function linkify(text){
 }
 
 // "Same as the parent/guardian above" keeps the qualifying name in sync while ticked.
+const syncQualifying = () => { if ($("sameAsParent").checked) { $("qFirst").value = $("pFirst").value; $("qLast").value = $("pLast").value; } };
 $("sameAsParent").addEventListener("change", e => {
-  const q = $("qualifying");
-  if (e.target.checked) { q.value = $("name").value; q.readOnly = true; } else { q.readOnly = false; q.focus(); }
+  ["qFirst","qLast"].forEach(id => $(id).readOnly = e.target.checked);
+  if (e.target.checked) syncQualifying(); else $("qFirst").focus();
 });
-$("name").addEventListener("input", () => { if ($("sameAsParent").checked) $("qualifying").value = $("name").value; });
+["pFirst","pLast"].forEach(id => $(id).addEventListener("input", syncQualifying));
+// The learner's details as typed (split names + parent ID), and the combined names used for display.
+const PERSON_FIELDS = ["pFirst","pLast","email","parentId","qFirst","qLast","sFirst","sLast"];
+function setPerson(p){
+  state.person = p;
+  state.name = `${p.pFirst} ${p.pLast}`.trim(); state.email = p.email;
+  state.qualifying = `${p.qFirst} ${p.qLast}`.trim(); state.student = `${p.sFirst} ${p.sLast}`.trim();
+}
 /* ---------------- talking to the backend ----------------
    Live course ("server mode"): the backend holds the correct answers. The course gets one section at a time
    (questions without answers), sends the learner's choices, and the backend grades and records them.
@@ -925,7 +957,8 @@ $("retryBtn").addEventListener("click", () => location.reload());
 function showSignIn(noticeKey){
   ["errorCard","segmentCard","reviewCard","doneCard"].forEach(id => $(id).classList.add("hidden"));
   // Pre-fill what we already know so a timed-out learner only has to press Start again.
-  [["name", state.name], ["email", state.email], ["qualifying", state.qualifying], ["student", state.student]].forEach(([id, v]) => { if (v && !$(id).value) $(id).value = v; });
+  const p = state.person || {};
+  PERSON_FIELDS.forEach(id => { if (p[id] && !$(id).value) $(id).value = p[id]; });
   $("startCard").classList.remove("hidden");
   $("startStatus").innerHTML = noticeKey ? `<span class="feedback bad">${esc(ui(noticeKey))}</span>` : "";
 }
@@ -934,13 +967,16 @@ function afterLastSection(){ if (CONFIG.reviewEnabled !== false) showReview(); e
 /* ---------------- sign in ---------------- */
 $("startForm").addEventListener("submit", async e => {
   e.preventDefault();
-  state.name = $("name").value.trim(); state.email = $("email").value.trim();
-  state.qualifying = $("qualifying").value.trim(); state.student = $("student").value.trim();
-  if (!state.name || !state.email || !state.qualifying || !state.student) return;
+  syncQualifying();
+  const p = Object.fromEntries(PERSON_FIELDS.map(id => [id, $(id).value.trim()]));
+  if (PERSON_FIELDS.some(id => !p[id])) return;
+  setPerson(p);
   if (serverMode()) {
     const btn = $("startForm").querySelector("button[type=submit]"); btn.disabled = true; $("startStatus").textContent = ui("starting");
     let r = null;
-    try { r = await call({ action:"start", name: state.name, email: state.email, qualifying: state.qualifying, student: state.student, lang: LANG }, () => $("startStatus").textContent = ui("busy")); }
+    try { r = await call({ action:"start", name: state.name, email: state.email, qualifying: state.qualifying, student: state.student,
+      parentFirst: p.pFirst, parentLast: p.pLast, parentId: p.parentId, qualifyingFirst: p.qFirst, qualifyingLast: p.qLast,
+      studentFirst: p.sFirst, studentLast: p.sLast, lang: LANG }, () => $("startStatus").textContent = ui("busy")); }
     catch (_) { btn.disabled = false; $("startStatus").innerHTML = `<span class="feedback bad">${esc(ui("netError"))}</span>`; return; }
     btn.disabled = false;
     if (!r.ok) { $("startStatus").innerHTML = `<span class="feedback bad">${esc(ui(r.error === "missing_fields" ? "missingFields" : r.error === "not_published" ? "notPublished" : "netError"))}</span>`; return; }
@@ -948,6 +984,7 @@ $("startForm").addEventListener("submit", async e => {
     $("startStatus").textContent = "";
   }
   $("who").textContent = `${state.student} · ${state.name}`;
+  setLeaveGuard(true);
   showSegment(0);
 });
 
@@ -977,7 +1014,7 @@ $("quizForm").addEventListener("submit", async e => {
     catch (_) { btn.disabled = false; $("status").innerHTML = `<span class="feedback bad">${esc(ui("netError"))}</span>`; return; }
     if (!r.ok) {
       btn.disabled = false;
-      if (r.error === "expired") { clearSession(); destroyPlayers(); showSignIn("sessionExpired"); return; }
+      if (r.error === "expired") { clearSession(); setLeaveGuard(false); destroyPlayers(); showSignIn("sessionExpired"); return; }
       if (r.error === "out_of_order") { await resumeFromServer(); return; }
       $("status").innerHTML = `<span class="feedback bad">${esc(ui("netError"))}</span>`; return;
     }
@@ -989,7 +1026,7 @@ $("quizForm").addEventListener("submit", async e => {
     passed = noQuiz ? true : (CONFIG.requireAllCorrect ? correct === total : true);
     if (CONFIG.revealCorrect && !passed) reveal = questions.map(q => q.answer);
     completed = passed && state.idx === segCount() - 1;
-    logLocal({ name: state.name, email: state.email, qualifyingParent: state.qualifying, studentName: state.student,
+    logLocal({ name: state.name, email: state.email, qualifyingParent: state.qualifying, studentName: state.student, parentId: (state.person || {}).parentId,
       submittedAt: new Date().toISOString(), segment: state.idx + 1, segmentTitle: seg.title, attempt: state.attempts,
       score: noQuiz ? "viewed" : `${correct}/${total}`, passed, answers: noQuiz ? "(no quiz)" : answers.map((a, qi) => questions[qi].options[a] ?? "").join(" | "),
       completedCourse: completed, language: LANG });
@@ -1048,7 +1085,7 @@ function finish(){
   state.idx = segCount(); renderProgress();
   ["segmentCard","reviewCard","startCard"].forEach(id => $(id).classList.add("hidden")); $("doneCard").classList.remove("hidden");
   $("doneTitle").textContent = tr("c:doneTitle", CONFIG.doneTitle); $("doneNote").textContent = tr("c:doneNote", CONFIG.doneNote);
-  clearSession();
+  clearSession(); setLeaveGuard(false);
   postParent({ type: "course-complete" });   // lets a host page react; no personal details
 }
 // Local mode only (preview / testing): keep a copy in this browser instead of sending anywhere.
@@ -1061,6 +1098,18 @@ function logLocal(entry){ try { const l = JSON.parse(localStorage.getItem("cours
    Only heights and scroll requests cross the boundary — never names or answers. */
 const EMBEDDED = window.parent !== window;
 let hostView = null;   // { top, height } of the frame's visible area, in frame coordinates
+/* ---------------- leaving before the end ----------------
+   While a learner is part-way through, closing the tab, reloading or navigating away asks them to confirm.
+   Browsers show their own wording ("Leave site? Changes you made may not be saved") — pages can't change it —
+   so the sign-in card says plainly that leaving loses progress. When embedded, the host page is told too, so it
+   can ask before the visitor navigates the whole site away (see embed-snippet.html). Not used in admin preview. */
+let leaveGuard = false;
+function setLeaveGuard(on){
+  on = !!on && !state.preview;
+  if (on === leaveGuard) return;
+  leaveGuard = on; postParent({ type: "herd-progress", active: on });
+}
+window.addEventListener("beforeunload", e => { if (leaveGuard) { e.preventDefault(); e.returnValue = ""; } });
 function postParent(msg){ if (EMBEDDED) try { window.parent.postMessage(msg, "*"); } catch(_){} }
 function scrollToCourseTop(){
   if (EMBEDDED && hostView) postParent({ type: "herd-scroll-top" });
@@ -1096,8 +1145,11 @@ async function resumeFromServer(){
   let r;
   try { r = await call({ action:"resume", token: state.token }, () => $("courseIntro").textContent = ui("busy")); } catch (_) { showError("loadFailTitle", "loadFailBody", true); return; }
   if (!r.ok) { clearSession(); showSignIn(r.error === "expired" ? "sessionExpired" : null); return; }
-  state.name = r.name; state.email = r.email || ""; state.qualifying = r.qualifying || ""; state.student = r.student; CONFIG.count = r.count;
+  if (r.person) setPerson(r.person);
+  else { state.name = r.name; state.email = r.email || ""; state.qualifying = r.qualifying || ""; state.student = r.student; }
+  CONFIG.count = r.count;
   $("who").textContent = `${state.student} · ${state.name}`;
+  setLeaveGuard(true);
   if (r.section) { storeSection(r.progress, r.section); showSegment(r.progress); }
   else if (!r.reviewed && CONFIG.reviewEnabled !== false) showReview();
   else finish();

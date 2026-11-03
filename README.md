@@ -1,6 +1,6 @@
 # HERD Meeting — Video Training Course
 
-Gated video training: learners enter name + email, watch each video segment, and must answer the multiple-choice questions to advance. When a learner finishes, one row is written to the Google Sheet with their details and a column for each section's result (passed, score, number of tries, minutes spent).
+Gated video training: learners sign in (parent/guardian first and last name, email, parent ID number, qualifying parent/guardian name, student first and last name), watch each video segment, and must answer the multiple-choice questions to advance. When a learner finishes, one row is written to the Google Sheet with their details and a column for each section's result (passed, score, number of tries, minutes spent).
 
 | File | Purpose |
 |---|---|
@@ -19,7 +19,7 @@ After the last section, learners rate the meeting 1–5 (required) and can leave
 
 Learners choose a language from a menu on the course; the choice is remembered and logged with each submission. English is the source language.
 
-- **Translations tab (admin):** tick the languages to offer, then **Translate new & changed**. Text is machine-translated with Google Translate (built into Apps Script — no API key). Every line can be edited; edited lines are marked *Reviewed* and are never overwritten by re-translation. When the English changes, the translation is flagged *Outdated* and learners see the English until it is re-translated. Publishing offers to translate anything new or outdated first.
+- **Translations tab (admin):** tick the languages to offer, then **Translate new & changed**. Text is machine-translated with Google Translate (built into Apps Script — no API key). Every line can be edited; edited lines are marked *Reviewed* and are never overwritten by re-translation. When the English changes, the translation is flagged *Outdated* and learners see the English until it is re-translated. Publishing offers to translate anything new or outdated first. A note beside the language menu tells learners the translation comes from Google Translate and may contain errors or exclusions.
 - **Captions:** each video module accepts English captions as a `.vtt` or `.srt` file (Vimeo and YouTube can both export these from their auto-captions). Captions are translated line by line with the original timings. MP4, Dropbox and Drive (locked player) videos show them as native subtitles; YouTube and Vimeo show them as an overlay with CC and full-screen buttons. Drive-player and BoxCast embeds cannot show captions.
 
 ## Images
@@ -71,3 +71,7 @@ Edit the HTML files and push to `main`. GitHub Pages redeploys within about a mi
 ## Backend changes
 
 After editing `apps-script.gs` in the Apps Script editor: **Deploy → Manage deployments → ✎ → Version: New version → Deploy.** The URL stays the same.
+
+## Leaving before the end
+
+While a learner is part-way through, closing the tab, reloading or navigating away asks them to confirm first. The browser shows its own wording (e.g. "Leave site? Changes you made may not be saved"); sites aren't allowed to change it, so the sign-in card says plainly that leaving before the end loses progress. Not shown in the admin preview. When embedded, the embed snippet also asks before the visitor navigates the host site away mid-course — re-paste the latest `embed-snippet.html` to get this.

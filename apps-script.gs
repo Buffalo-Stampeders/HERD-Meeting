@@ -33,15 +33,15 @@
  */
 
 const ADMIN_KEY = "change-me-to-a-long-secret";   // <-- change this
-const BACKEND_VERSION = 8;   // admin.html warns when the deployed script is older than it expects
+const BACKEND_VERSION = 9;   // admin.html warns when the deployed script is older than it expects
 
 const SUB_SHEET = "Submissions";
 const CFG_SHEET = "Config";
 // One row per learner who finishes. These come first, then "Section 1", "Section 2", … (one per section).
-const SUB_BASE = ["submittedAt", "submittedAtLocal", "studentName", "name", "email", "qualifyingParent",
-                  "course", "language", "minutes", "retries"];
+const SUB_BASE = ["submittedAt", "submittedAtLocal", "studentFirst", "studentLast", "parentFirst", "parentLast", "email", "parentId",
+                  "qualifyingFirst", "qualifyingLast", "course", "language", "minutes", "retries"];
 const REVIEW_SHEET = "Reviews";
-const REVIEW_COLUMNS = ["submittedAt", "submittedAtLocal", "name", "email", "course", "rating", "comment", "language", "qualifyingParent", "studentName"];
+const REVIEW_COLUMNS = ["submittedAt", "submittedAtLocal", "name", "email", "course", "rating", "comment", "language", "qualifyingParent", "studentName", "parentId"];
 const CHUNK = 45000;          // characters per Config cell
 const CACHE_CHUNK = 25000;    // characters per cache entry (cache values are capped at 100 KB)
 const SESSION_TTL = 21600;    // 6 hours, the longest Apps Script's cache allows
@@ -65,6 +65,8 @@ function imageFolder() {
 }
 // Values starting with = + - @ would be treated as formulas by Sheets; store them as text.
 const cellSafe = v => (typeof v === "string" && /^[=+\-@]/.test(v)) ? "'" + v : v;
+// IDs are kept exactly as typed: without this, Sheets would turn "00123" into the number 123.
+const asText = v => (typeof v === "string" && v && !/^'/.test(v)) ? "'" + v : v;
 
 /* ---------- published course: read through the cache so learners don't each hit the sheet ---------- */
 function readConfigFromSheet() {
@@ -183,15 +185,18 @@ function writeCompletion(cfg, s, now) {
   const t0 = s.t0 || (s.dl && s.dl[0]) || now.getTime();
   let retries = 0; for (let i = 0; i < n; i++) retries += Math.max(0, ((s.att || {})[i] || 1) - 1);
   const row = {
-    submittedAt: now.toISOString(), submittedAtLocal: localStamp(now), studentName: s.student, name: s.name, email: s.email,
-    qualifyingParent: s.qualifying, course: cfg.courseTitle, language: s.lang, minutes: Math.round((now.getTime() - t0) / 60000), retries: retries
+    submittedAt: now.toISOString(), submittedAtLocal: localStamp(now),
+    studentFirst: s.sf !== undefined ? s.sf : s.student, studentLast: s.sl || "", parentFirst: s.pf !== undefined ? s.pf : s.name, parentLast: s.pl || "",
+    email: s.email, parentId: s.pid || "", qualifyingFirst: s.qf !== undefined ? s.qf : s.qualifying, qualifyingLast: s.ql || "",
+    course: cfg.courseTitle, language: s.lang, minutes: Math.round((now.getTime() - t0) / 60000), retries: retries
   };
-  const vals = SUB_BASE.map(k => row[k]).concat(segs.map((seg, i) => sectionResult(seg, (s.res || {})[i])));
-  sh.appendRow(vals.map(cellSafe));
+  const vals = SUB_BASE.map(k => row[k]).concat(segs.map((seg, i) => sectionResult(seg, (s.res || {})[i]))).map(cellSafe);
+  vals[SUB_BASE.indexOf("parentId")] = asText(row.parentId);
+  sh.appendRow(vals);
 }
 function appendRow(name, cols, row) {
   const sh = sheet(name); ensureHeader(sh, cols);
-  sh.appendRow(cols.map(k => cellSafe((k in row) ? row[k] : "")));
+  sh.appendRow(cols.map(k => k === "parentId" ? asText(String(row[k] || "")) : cellSafe((k in row) ? row[k] : "")));
 }
 function localStamp(d) { return Utilities.formatDate(d, Session.getScriptTimeZone(), "M/d/yyyy, h:mm:ss a"); }
 
@@ -287,14 +292,22 @@ function saveConfig(data) {
 
 /* ---------- learner flow ---------- */
 const str = (v, max) => String(v == null ? "" : v).trim().slice(0, max || 200);
+// Older course pages send whole names only; split at the last space so those learners still get a row.
+function splitName(full) { const t = str(full).replace(/\s+/g, " "), k = t.lastIndexOf(" "); return k > 0 ? [t.slice(0, k), t.slice(k + 1)] : [t, ""]; }
 function startSession(d) {
   const cfg = getConfig().config;
   if (!cfg || !(cfg.segments || []).length) return { ok: false, error: "not_published" };
-  const name = str(d.name), email = str(d.email), qualifying = str(d.qualifying), student = str(d.student);
-  if (!name || !qualifying || !student || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, error: "missing_fields" };
+  const split = "parentFirst" in d;
+  const [pf, pl] = split ? [str(d.parentFirst, 100), str(d.parentLast, 100)] : splitName(d.name);
+  const [qf, ql] = split ? [str(d.qualifyingFirst, 100), str(d.qualifyingLast, 100)] : splitName(d.qualifying);
+  const [sf, sl] = split ? [str(d.studentFirst, 100), str(d.studentLast, 100)] : splitName(d.student);
+  const email = str(d.email), pid = str(d.parentId, 40);
+  if (!pf || !qf || !sf || (split && (!pl || !ql || !sl || !pid)) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, error: "missing_fields" };
+  const join = (a, b) => (a + " " + b).trim();
   const token = Utilities.getUuid();
   const now = Date.now();
-  putSession(token, { name, email, qualifying, student, lang: str(d.lang, 10) || "en", p: 0, att: {}, dl: { 0: now }, res: {}, t0: now, rev: false });
+  putSession(token, { pf, pl, qf, ql, sf, sl, pid, name: join(pf, pl), email, qualifying: join(qf, ql), student: join(sf, sl),
+                      lang: str(d.lang, 10) || "en", p: 0, att: {}, dl: { 0: now }, res: {}, t0: now, rev: false });
   return { ok: true, token, progress: 0, count: cfg.segments.length, section: publicSection(cfg, 0) };
 }
 function resumeSession(d) {
@@ -302,7 +315,8 @@ function resumeSession(d) {
   const cfg = getConfig().config; if (!cfg) return { ok: false, error: "not_published" };
   const count = cfg.segments.length;
   if (s.p < count) { s.dl[s.p] = s.dl[s.p] || Date.now(); putSession(d.token, s); }
-  return { ok: true, progress: s.p, count, name: s.name, email: s.email, qualifying: s.qualifying, student: s.student, reviewed: !!s.rev,
+  const person = s.pf !== undefined ? { pFirst: s.pf, pLast: s.pl, email: s.email, parentId: s.pid, qFirst: s.qf, qLast: s.ql, sFirst: s.sf, sLast: s.sl } : null;
+  return { ok: true, progress: s.p, count, name: s.name, email: s.email, qualifying: s.qualifying, student: s.student, person, reviewed: !!s.rev,
            section: s.p < count ? publicSection(cfg, s.p) : null };
 }
 function gradeAnswer(d) {
@@ -341,7 +355,8 @@ function saveReview(d) {
   const now = new Date();
   appendRow(REVIEW_SHEET, REVIEW_COLUMNS, {
     submittedAt: now.toISOString(), submittedAtLocal: localStamp(now), name: s.name, email: s.email, course: cfg.courseTitle,
-    rating: rating, comment: str(d.comment, 2000), language: str(d.lang, 10) || s.lang, qualifyingParent: s.qualifying, studentName: s.student
+    rating: rating, comment: str(d.comment, 2000), language: str(d.lang, 10) || s.lang, qualifyingParent: s.qualifying, studentName: s.student,
+    parentId: s.pid || ""
   });
   s.rev = true; putSession(d.token, s);
   return { ok: true };

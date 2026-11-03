@@ -353,7 +353,7 @@ async function verify(endpoint, key){
 }
 
 /* ---- login gate ---- */
-const REQUIRED_BACKEND = 8;
+const REQUIRED_BACKEND = 9;
 async function checkBackend(){
   let v = 0;
   try { const r = await fetch(conn.endpoint + "?action=version&t=" + Date.now()); const t = await r.text(); try { v = JSON.parse(t).version || 0; } catch (_) { v = 0; } }
@@ -684,9 +684,11 @@ const plainText = html => { const d = document.createElement("div"); d.innerHTML
    so a change to the English marks the translation "Outdated" and the course falls back to English for it.
    UI must match the copy in course.html. */
 const UI = {
-  signIn:"Sign in", beforeBegin:"Before you begin", fullName:"Full name", namePh:"First and last name",
-  parentName:"Parent/Guardian Name", parentEmail:"Parent/Guardian Email", qualifyingName:"Qualifying Parent/Guardian Name",
-  studentName:"Student Name", sameAsParent:"Same as the parent/guardian above", studentPh:"Student's first and last name",
+  signIn:"Sign in", beforeBegin:"Before you begin", firstName:"First name", lastName:"Last name",
+  parentName:"Parent/Guardian Name", parentEmail:"Parent/Guardian Email", parentId:"Parent ID Number", qualifyingName:"Qualifying Parent/Guardian Name",
+  studentName:"Student Name", sameAsParent:"Same as the parent/guardian above",
+  translateNote:"Translation provided by Google Translate. There may be unintended errors or exclusions.",
+  stayNote:"Please keep this page open until you finish. If you leave or close it before the end, your progress will be lost.",
   email:"Email address", start:"Start course", loading:"Loading course…", sectionOf:"Section {n} of {total}",
   watchToUnlock:"Watch the full video to unlock the questions below.", watchToContinue:"Watch the full video to continue.",
   answerBelow:"Answer the questions below to continue.", videoDoneAnswer:"Video complete — answer the questions below.",
@@ -1212,15 +1214,21 @@ function renderSubs(){
   const all = subObjects(), rows = filteredSubs();
   const oldLayout = subs.columns.includes("segmentTitle");
   // A parent may complete the course for more than one student, so count parent email + student name.
-  const who = s => `${String(s.email).toLowerCase()}|${String(s.studentName || "").trim().toLowerCase()}`;
+  const studentOf = s => s.studentFirst !== undefined ? `${s.studentFirst} ${s.studentLast}` : (s.studentName || "");
+  const who = s => `${String(s.email).toLowerCase()}|${String(studentOf(s)).trim().toLowerCase().replace(/\s+/g, " ")}`;
   const people = new Set(all.map(who));
   const mins = all.map(s => Number(s.minutes)).filter(n => n >= 0);
   const avg = mins.length ? Math.round(mins.reduce((a, b) => a + b, 0) / mins.length) : 0;
   const clean = all.length ? Math.round(100 * all.filter(s => !(Number(s.retries) || 0)).length / all.length) : 0;
   $("stats").innerHTML = oldLayout ? "" : [[all.length,"Completions"],[people.size,"Students"],[avg + " min","Average time"],[clean+"%","Finished with no retries"]]
     .map(([n,l])=>`<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
-  const labels = { submittedAtLocal:"Finished", studentName:"Student", name:"Parent/Guardian", email:"Email", qualifyingParent:"Qualifying parent", language:"Lang", minutes:"Minutes", retries:"Retries" };
-  const show = oldLayout ? subs.columns : ["submittedAtLocal","studentName","name","email","qualifyingParent","language","minutes","retries"].concat(subs.columns.filter(isSectionCol));
+  const labels = { submittedAtLocal:"Finished", studentFirst:"Student first", studentLast:"Student last", parentFirst:"Parent first", parentLast:"Parent last",
+    email:"Email", parentId:"Parent ID", qualifyingFirst:"Qualifying first", qualifyingLast:"Qualifying last",
+    studentName:"Student", name:"Parent/Guardian", qualifyingParent:"Qualifying parent", language:"Lang", minutes:"Minutes", retries:"Retries" };
+  const base = subs.columns.includes("studentFirst")
+    ? ["submittedAtLocal","studentFirst","studentLast","parentFirst","parentLast","email","parentId","qualifyingFirst","qualifyingLast","language","minutes","retries"]
+    : ["submittedAtLocal","studentName","name","email","qualifyingParent","language","minutes","retries"];
+  const show = oldLayout ? subs.columns : base.filter(c => subs.columns.includes(c)).concat(subs.columns.filter(isSectionCol));
   $("subTable").querySelector("thead").innerHTML = "<tr>" + show.map(c=>`<th>${esc(labels[c] || c)}</th>`).join("") + "</tr>";
   $("subTable").querySelector("tbody").innerHTML = rows.map(s => "<tr>" + show.map(c => {
     let v = s[c];

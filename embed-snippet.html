@@ -13,6 +13,7 @@
   var HEADER_OFFSET = 100;
   var ORIGIN = "https://buffalo-stampeders.github.io";
   var frame = document.getElementById("herd-course");
+  var inProgress = false;   // true while a learner is part-way through: leaving the page asks them to confirm
   function sendViewport() {
     if (!frame.contentWindow) return;
     var r = frame.getBoundingClientRect(), vh = window.innerHeight || document.documentElement.clientHeight;
@@ -23,11 +24,14 @@
     if (e.origin !== ORIGIN || e.source !== frame.contentWindow || !e.data) return;
     if (e.data.type === "herd-height" && e.data.height > 0) { frame.style.height = Math.ceil(e.data.height) + "px"; sendViewport(); }
     else if (e.data.type === "herd-ready") sendViewport();
+    else if (e.data.type === "herd-progress") inProgress = !!e.data.active;
+    else if (e.data.type === "course-complete") inProgress = false;
     else if (e.data.type === "herd-scroll-top") {
       var r = frame.getBoundingClientRect();
       if (r.top < HEADER_OFFSET || r.top > window.innerHeight * 0.4) window.scrollTo({ top: window.pageYOffset + r.top - HEADER_OFFSET, behavior: "smooth" });
     }
   });
+  window.addEventListener("beforeunload", function (e) { if (inProgress) { e.preventDefault(); e.returnValue = ""; } });
   window.addEventListener("scroll", sendViewport, { passive: true });
   window.addEventListener("resize", sendViewport);
 })();
