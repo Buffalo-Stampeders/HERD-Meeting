@@ -121,10 +121,11 @@
   .lang-box{display:flex;flex-direction:column;align-items:flex-end;gap:5px}
   .tx-note{margin:0;font-size:11px;line-height:1.45;color:var(--muted,#666);text-align:right}
   .tx-note span{display:block;white-space:nowrap}
-  @media (max-width:600px){ .lang-box{align-items:flex-start} .tx-note{text-align:left} .tx-note span{white-space:normal} }
+  .header-right{display:flex;flex-direction:column;align-items:flex-end;gap:8px;margin-left:auto}
+  .header .who{text-align:right}
+  @media (max-width:600px){ .header-right{align-items:flex-start;margin-left:0} .header .who{text-align:left} .lang-box{align-items:flex-start} .tx-note{text-align:left} .tx-note span{white-space:normal} }
   .same-as input{accent-color:var(--green);width:16px;height:16px;margin:0}
   .same-as label{margin:0;font-size:13px;font-weight:500;letter-spacing:0;text-transform:none;color:var(--ink);cursor:pointer}
-  .header-right{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
   .lang-wrap{display:flex;align-items:center;gap:6px;margin:0;font-size:16px;letter-spacing:0;text-transform:none}
   .lang-pick{font:inherit;font-size:13px;font-weight:600;color:var(--green);border:1px solid var(--bronze);background:#fff;padding:5px 8px;border-radius:3px;cursor:pointer}
   /* captions overlay for YouTube / Vimeo */
