@@ -608,7 +608,21 @@ function renderVideo(seg){
       vmPlayer = new Vimeo.Player(f);
       const guarded = () => gating() || locking();
       // Vimeo reports a scrub as a time update BEFORE it reports the seek, so the time update itself has to
-      // catch the jump: at 1x, real playback can't move more than ~2 s between updates.
+      // catch the jump. Normally updates arrive every ¼ s, but browsers delay or bunch them up while the video
+      // keeps playing (tab in the background, phone power saving, catching up after buffering). So a jump is
+      // allowed if real time that passed WHILE PLAYING covers it — at 1x a video can't get ahead of the clock —
+      // plus 2 s of slack. Time spent paused doesn't count, so scrubbing ahead is still blocked.
+      const clock = () => performance.now();
+      let playingSince = 0, credit = 0;   // wall-clock ms since the last accepted update while playing; ms banked at a pause
+      const allowance = () => (credit + (playingSince ? clock() - playingSince : 0)) * 1.05 / 1000;
+      const allowed = () => furthest + 2 + allowance();
+      const accept = sec => { furthest = Math.max(furthest, sec); credit = 0; if (playingSince) playingSince = clock(); saveFurthest(); };
+      // Survive a reload part-way through: remember how far this learner got in this section (this browser tab only).
+      const segId = (CONFIG.segments[state.idx] || {}).id || state.idx;
+      const keyF = `vmFurthest:${state.token || "local"}:${segId}`;
+      let savedAt = 0;
+      const saveFurthest = () => { if (furthest - savedAt >= 5) { savedAt = furthest; try { sessionStorage.setItem(keyF, String(Math.floor(furthest))); } catch(_){} } };
+      try { const prev = Number(sessionStorage.getItem(keyF)) || 0; if (prev > 5) { furthest = savedAt = prev; vmPlayer.setCurrentTime(Math.max(0, prev - 3)).catch(()=>{}); } } catch(_){}
       const snapBack = () => {
         if (snapping) return; snapping = true; skipNotice();
         vmPlayer.setCurrentTime(furthest).catch(()=>{})
@@ -616,16 +630,25 @@ function renderVideo(seg){
           .finally(() => setTimeout(() => { snapping = false; }, 400));
       };
       try { vmPlayer.getDuration().then(d => { duration = d || 0; }).catch(()=>{}); } catch (_) {}
+      vmPlayer.on("play", () => { playingSince = clock(); });
+      vmPlayer.on("bufferend", () => { playingSince = clock(); });
+      const stop = () => { if (playingSince) credit += clock() - playingSince; playingSince = 0; };
+      vmPlayer.on("pause", stop);
+      vmPlayer.on("bufferstart", stop);
       vmPlayer.on("timeupdate", d => {
         if (d.duration) duration = d.duration;
         if (snapping) return;
-        if (guarded() && d.seconds > furthest + 2) { snapBack(); return; }
-        furthest = Math.max(furthest, d.seconds); ccUpdate(d.seconds);
+        if (guarded() && d.seconds > allowed()) { snapBack(); return; }
+        accept(d.seconds); ccUpdate(d.seconds);
       });
-      vmPlayer.on("seeking", d => { if (guarded() && d.seconds > furthest + 2) snapBack(); });
-      vmPlayer.on("ended", () => { if (!guarded() || !duration || furthest >= duration - 3) videoEnded(); else snapBack(); });
+      vmPlayer.on("seeking", d => { if (guarded() && d.seconds > allowed()) snapBack(); });
+      vmPlayer.on("ended", () => {
+        stop();
+        if (!guarded() || !duration || furthest >= duration - 3 || duration <= allowed() + 1) { furthest = Math.max(furthest, duration); videoEnded(); }
+        else snapBack();
+      });
       vmPlayer.on("seeked", d => {
-        if (guarded() && d.seconds > furthest + 2) snapBack();
+        if (guarded() && d.seconds > allowed()) snapBack();
       });
       if (lock) vmPlayer.on("playbackratechange", d => { if (d.playbackRate !== 1) vmPlayer.setPlaybackRate(1).catch(()=>{}); });
       vimeoNativeCaptions();
