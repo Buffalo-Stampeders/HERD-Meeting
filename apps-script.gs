@@ -33,7 +33,7 @@
  */
 
 const ADMIN_KEY = "change-me-to-a-long-secret";   // <-- change this
-const BACKEND_VERSION = 10;   // admin.html warns when the deployed script is older than it expects
+const BACKEND_VERSION = 11;   // admin.html warns when the deployed script is older than it expects
 
 const SUB_SHEET = "Submissions";
 const CFG_SHEET = "Config";
@@ -108,7 +108,16 @@ function getConfig() {
 
 /* ---------- what learners are allowed to see ---------- */
 const COURSE_FIELDS = ["courseTitle", "intro", "doneTitle", "doneNote", "requireFullWatch", "lockPlayback", "requireAllCorrect",
-  "revealCorrect", "captionsOn", "reviewEnabled", "reviewTitle", "reviewPrompt", "languages"];
+  "revealCorrect", "captionsOn", "reviewEnabled", "reviewTitle", "reviewPrompt", "languages", "closesAt", "closedTitle", "closedNote"];
+// Deadline: after cfg.closesAt (an ISO time set in the dashboard) nobody can sign in or submit a section.
+// cfg.graceMinutes lets people who had already signed in keep going a little longer (0 = hard stop).
+// The end-of-course review is still accepted after the deadline, since the learner's completion was already recorded.
+function isClosed(cfg, alreadyStarted) {
+  const t = Date.parse(cfg && cfg.closesAt || "");
+  if (!t) return false;
+  const grace = alreadyStarted ? Math.max(0, Number(cfg.graceMinutes) || 0) * 60000 : 0;
+  return Date.now() >= t + grace;
+}
 function pickTranslations(cfg, test) {
   const out = {};
   Object.keys(cfg.translations || {}).forEach(lang => {
@@ -122,6 +131,7 @@ function publicShell(cfg) {
   const shell = { count: (cfg.segments || []).length };
   COURSE_FIELDS.forEach(f => { if (f in cfg) shell[f] = cfg[f]; });
   shell.translations = pickTranslations(cfg, k => /^(c|ui):/.test(k));
+  shell.closed = isClosed(cfg, false);
   return shell;
 }
 function publicSection(cfg, i) {
@@ -303,6 +313,7 @@ function splitName(full) { const t = str(full).replace(/\s+/g, " "), k = t.lastI
 function startSession(d) {
   const cfg = getConfig().config;
   if (!cfg || !(cfg.segments || []).length) return { ok: false, error: "not_published" };
+  if (isClosed(cfg, false)) return { ok: false, error: "closed" };
   const split = "parentFirst" in d;
   const [pf, pl] = split ? [str(d.parentFirst, 100), str(d.parentLast, 100)] : splitName(d.name);
   const [qf, ql] = split ? [str(d.qualifyingFirst, 100), str(d.qualifyingLast, 100)] : splitName(d.qualifying);
@@ -320,6 +331,7 @@ function resumeSession(d) {
   const s = getSession(d.token); if (!s) return { ok: false, error: "expired" };
   const cfg = getConfig().config; if (!cfg) return { ok: false, error: "not_published" };
   const count = cfg.segments.length;
+  if (s.p < count && isClosed(cfg, true)) return { ok: false, error: "closed" };
   if (s.p < count) { s.dl[s.p] = s.dl[s.p] || Date.now(); putSession(d.token, s); }
   const person = s.pf !== undefined ? { pFirst: s.pf, pLast: s.pl, email: s.email, parentId: s.pid, qFirst: s.qf, qLast: s.ql, sFirst: s.sf, sLast: s.sl } : null;
   return { ok: true, progress: s.p, count, name: s.name, email: s.email, qualifying: s.qualifying, student: s.student, person, reviewed: !!s.rev,
@@ -329,6 +341,7 @@ function gradeAnswer(d) {
   const s = getSession(d.token); if (!s) return { ok: false, error: "expired" };
   const cfg = getConfig().config; if (!cfg) return { ok: false, error: "not_published" };
   const i = Number(d.index), count = cfg.segments.length;
+  if (isClosed(cfg, true)) return { ok: false, error: "closed" };
   if (i !== s.p || i >= count) return { ok: false, error: "out_of_order", progress: s.p };
   const seg = cfg.segments[i];
   const questions = seg.noQuiz ? [] : (seg.questions || []);

@@ -358,6 +358,7 @@ const UI = {
   sessionExpired:"Your session timed out. Please sign in again to continue.", errEyebrow:"Something went wrong", retry:"Try again",
   loadFailTitle:"We couldn't load the course", loadFailBody:"Please check your internet connection and try again in a minute.",
   notPublishedTitle:"This course isn't available yet", notPublished:"Please check back later.",
+  closedTitle:"This course is now closed", closedNote:"The deadline to complete it has passed.",
   busy:"Lots of people are joining right now — one moment…", stillSaving:"Still saving — one moment…"
 };
 const LANG_NAMES = { en:"English", es:"Español", ht:"Kreyòl ayisyen", pt:"Português", fr:"Français", vi:"Tiếng Việt", "zh-CN":"中文（简体）",
@@ -403,6 +404,7 @@ $("langPick").addEventListener("change", e => {
   applyLangAttrs(); applyStatic();
   if (!$("segmentCard").classList.contains("hidden")) localizeSegment(true);
   if (!$("reviewCard").classList.contains("hidden")) localizeReview();
+  if (state.closedShown) showClosed();
 });
 
 function renderProgress(){
@@ -982,6 +984,17 @@ function showError(titleKey, bodyKey, canRetry){
   $("errorCard").classList.remove("hidden");
 }
 $("retryBtn").addEventListener("click", () => location.reload());
+// Deadline passed (the server decides; see isClosed in apps-script.gs). Wording is set in the dashboard.
+function showClosed(){
+  clearSession(); setLeaveGuard(false); try { destroyPlayers(); } catch(_){}
+  ["startCard","segmentCard","reviewCard","doneCard"].forEach(id => $(id).classList.add("hidden"));
+  $("errorCard").querySelector(".eyebrow").classList.add("hidden");
+  $("errTitle").textContent = tr("c:closedTitle", CONFIG.closedTitle) || ui("closedTitle");
+  $("errBody").textContent = tr("c:closedNote", CONFIG.closedNote) || ui("closedNote");
+  $("retryBtn").classList.add("hidden");
+  $("errorCard").classList.remove("hidden");
+  state.closedShown = true;
+}
 function showSignIn(noticeKey){
   ["errorCard","segmentCard","reviewCard","doneCard"].forEach(id => $(id).classList.add("hidden"));
   // Pre-fill what we already know so a timed-out learner only has to press Start again.
@@ -1007,6 +1020,7 @@ $("startForm").addEventListener("submit", async e => {
       studentFirst: p.sFirst, studentLast: p.sLast, lang: LANG }, () => $("startStatus").textContent = ui("busy")); }
     catch (_) { btn.disabled = false; $("startStatus").innerHTML = `<span class="feedback bad">${esc(ui("netError"))}</span>`; return; }
     btn.disabled = false;
+    if (!r.ok && r.error === "closed") { showClosed(); return; }
     if (!r.ok) { $("startStatus").innerHTML = `<span class="feedback bad">${esc(ui(r.error === "missing_fields" ? "missingFields" : r.error === "not_published" ? "notPublished" : "netError"))}</span>`; return; }
     state.token = r.token; CONFIG.count = r.count; storeSection(0, r.section); saveSession();
     $("startStatus").textContent = "";
@@ -1042,6 +1056,7 @@ $("quizForm").addEventListener("submit", async e => {
     catch (_) { btn.disabled = false; $("status").innerHTML = `<span class="feedback bad">${esc(ui("netError"))}</span>`; return; }
     if (!r.ok) {
       btn.disabled = false;
+      if (r.error === "closed") { showClosed(); return; }
       if (r.error === "expired") { clearSession(); setLeaveGuard(false); destroyPlayers(); showSignIn("sessionExpired"); return; }
       if (r.error === "out_of_order") { await resumeFromServer(); return; }
       $("status").innerHTML = `<span class="feedback bad">${esc(ui("netError"))}</span>`; return;
@@ -1172,6 +1187,7 @@ if (EMBEDDED) {
 async function resumeFromServer(){
   let r;
   try { r = await call({ action:"resume", token: state.token }, () => $("courseIntro").textContent = ui("busy")); } catch (_) { showError("loadFailTitle", "loadFailBody", true); return; }
+  if (!r.ok && r.error === "closed") { showClosed(); return; }
   if (!r.ok) { clearSession(); showSignIn(r.error === "expired" ? "sessionExpired" : null); return; }
   if (r.person) setPerson(r.person);
   else { state.name = r.name; state.email = r.email || ""; state.qualifying = r.qualifying || ""; state.student = r.student; }
@@ -1209,7 +1225,14 @@ async function resumeFromServer(){
   initLanguages();
   applyStatic();
   renderProgress();
+  if (serverMode() && CONFIG.closed) { showClosed(); return; }
   startBtn.disabled = false;
+  // Page left open on the sign-in screen past the deadline: switch to the closed message (the server enforces it regardless).
+  const closesAt = Date.parse(CONFIG.closesAt || "");
+  if (serverMode() && closesAt) {
+    const tick = () => { if (Date.now() >= closesAt) { if (!state.token && !$("startCard").classList.contains("hidden")) showClosed(); } else setTimeout(tick, Math.min(60000, closesAt - Date.now() + 500)); };
+    tick();
+  }
   if (serverMode()) {
     let saved = null; try { saved = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null"); } catch(_){}
     if (saved && saved.token) { state.token = saved.token; await resumeFromServer(); }   // refresh mid-course: pick up where they left off

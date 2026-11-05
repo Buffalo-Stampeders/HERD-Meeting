@@ -73,6 +73,8 @@
   .tablewrap{overflow:auto;max-height:65vh;border:1px solid var(--line)}
   .pill{display:inline-block;padding:1px 8px;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase}
   .pill.ok{background:#e8f5ec;color:var(--ok)} .pill.bad{background:#fdecea;color:var(--bad)}
+  .deadline-box{border:1px solid var(--line);border-left:3px solid var(--bronze);padding:4px 14px 12px;margin-top:14px;background:var(--card)}
+  #closesAtHint.past{color:var(--bad);font-weight:600}
   #subTable td{vertical-align:top} .sec-title{font-size:12px;color:var(--muted,#666);min-width:140px} .sec-res{font-weight:600;color:var(--ok)} .sec-res.warn{color:var(--bronze)}
   .stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}
   .stat{flex:1;min-width:140px;background:var(--card);border:1px solid var(--line);border-top:3px solid var(--bronze);padding:12px 14px}
@@ -210,6 +212,19 @@
       <div class="row" id="reviewTextRow">
         <div><label>Rating heading</label><input type="text" id="reviewTitle" placeholder="How was this meeting?"></div>
         <div style="flex:2"><label>Rating instructions</label><input type="text" id="reviewPrompt" placeholder="Rate it from 1 (poor) to 5 (excellent). Comments are optional."></div>
+      </div>
+      <div class="deadline-box">
+        <div class="row">
+          <div><label>Close the course at <span class="hint" style="display:inline">(your computer's time zone)</span></label>
+            <div style="display:flex;gap:8px;align-items:center"><input type="datetime-local" id="closesAt" style="flex:1"><button type="button" class="btn ghost sm" id="clearClosesAt">No deadline</button></div>
+            <div class="hint" id="closesAtHint"></div></div>
+          <div style="max-width:240px"><label>Grace minutes</label><input type="number" id="graceMinutes" min="0" max="1440" step="5" placeholder="0" style="width:100%">
+            <div class="hint">0 = everyone stops at the deadline. Otherwise people already in the course get this long to finish; nobody new can start.</div></div>
+        </div>
+        <div class="row" id="closedTextRow">
+          <div><label>Closed heading</label><input type="text" id="closedTitle" placeholder="This course is now closed"></div>
+          <div style="flex:2"><label>Closed message</label><input type="text" id="closedNote" placeholder="The deadline to complete it has passed."></div>
+        </div>
       </div>
       <div class="row" style="margin-top:8px">
         <div class="check"><input type="checkbox" id="requireFullWatch"><span>Learner must watch the whole video before questions unlock</span></div>
@@ -353,7 +368,7 @@ async function verify(endpoint, key){
 }
 
 /* ---- login gate ---- */
-const REQUIRED_BACKEND = 10;
+const REQUIRED_BACKEND = 11;
 async function checkBackend(){
   let v = 0;
   try { const r = await fetch(conn.endpoint + "?action=version&t=" + Date.now()); const t = await r.text(); try { v = JSON.parse(t).version || 0; } catch (_) { v = 0; } }
@@ -499,6 +514,9 @@ function render(){
   $("reviewEnabled").checked = config.reviewEnabled !== false;
   $("reviewTitle").value = config.reviewTitle || ""; $("reviewPrompt").value = config.reviewPrompt || "";
   $("reviewTextRow").classList.toggle("hidden", config.reviewEnabled === false);
+  $("closesAt").value = toLocalInput(config.closesAt); $("graceMinutes").value = config.graceMinutes || "";
+  $("closedTitle").value = config.closedTitle || ""; $("closedNote").value = config.closedNote || "";
+  renderDeadline();
   renderModules();
 }
 
@@ -706,6 +724,7 @@ const UI = {
   sessionExpired:"Your session timed out. Please sign in again to continue.", errEyebrow:"Something went wrong", retry:"Try again",
   loadFailTitle:"We couldn't load the course", loadFailBody:"Please check your internet connection and try again in a minute.",
   notPublishedTitle:"This course isn't available yet", notPublished:"Please check back later.",
+  closedTitle:"This course is now closed", closedNote:"The deadline to complete it has passed.",
   busy:"Lots of people are joining right now — one moment…", stillSaving:"Still saving — one moment…"
 };
 const LANG_NAMES = { en:"English", es:"Español", ht:"Kreyòl ayisyen", pt:"Português", fr:"Français", vi:"Tiếng Việt", "zh-CN":"中文（简体）",
@@ -757,6 +776,10 @@ function collectStrings(cfg){
   };
   add("c:courseTitle", "Course title", cfg.courseTitle); add("c:intro", "Intro text", cfg.intro);
   add("c:doneTitle", "Completion heading", cfg.doneTitle); add("c:doneNote", "Completion message", cfg.doneNote);
+  if (cfg.closesAt) {
+    add("c:closedTitle", "Closed heading", cfg.closedTitle || "This course is now closed");
+    add("c:closedNote", "Closed message", cfg.closedNote || "The deadline to complete it has passed.");
+  }
   if (cfg.reviewEnabled !== false) {
     add("c:reviewTitle", "Rating heading", cfg.reviewTitle || "How was this meeting?");
     add("c:reviewPrompt", "Rating instructions", cfg.reviewPrompt || "Rate it from 1 (poor) to 5 (excellent). Comments are optional.");
@@ -1158,6 +1181,30 @@ function renderQuestion(mi, qi, q){
   $(id).addEventListener("input", e => { config[k] = e.target.value; markDirty(); }));
 $("reviewEnabled").addEventListener("change", e => { config.reviewEnabled = e.target.checked; $("reviewTextRow").classList.toggle("hidden", !e.target.checked); markDirty(); });
 ["reviewTitle","reviewPrompt"].forEach(k => $(k).addEventListener("input", e => { config[k] = e.target.value; markDirty(); }));
+/* deadline: stored as an exact moment (ISO, UTC); the backend refuses sign-ins and submissions after it */
+function toLocalInput(iso){
+  const d = new Date(iso || ""); if (isNaN(d)) return "";
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function renderDeadline(){
+  const t = Date.parse(config.closesAt || ""), hint = $("closesAtHint");
+  $("closedTextRow").classList.toggle("hidden", !t);
+  hint.classList.remove("past");
+  if (!t) { hint.textContent = "No deadline: the course stays open."; return; }
+  const et = new Date(t).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+  const grace = Number(config.graceMinutes) || 0;
+  if (t <= Date.now()) { hint.textContent = `Closed since ${et}${grace ? ` (+${grace} min for people already in)` : ""}.`; hint.classList.add("past"); }
+  else hint.textContent = `Closes ${et}${grace ? `; people already in get ${grace} more minutes` : ""}. Takes effect once you publish.`;
+}
+$("closesAt").addEventListener("change", e => {
+  const d = e.target.value ? new Date(e.target.value) : null;
+  if (d && !isNaN(d)) config.closesAt = d.toISOString(); else delete config.closesAt;
+  renderDeadline(); markDirty();
+});
+$("clearClosesAt").addEventListener("click", () => { $("closesAt").value = ""; delete config.closesAt; renderDeadline(); markDirty(); });
+$("graceMinutes").addEventListener("input", e => { const n = Math.max(0, Math.round(Number(e.target.value) || 0)); if (n) config.graceMinutes = n; else delete config.graceMinutes; renderDeadline(); markDirty(); });
+["closedTitle","closedNote"].forEach(k => $(k).addEventListener("input", e => { config[k] = e.target.value; markDirty(); }));
 ["requireFullWatch","requireAllCorrect","revealCorrect","lockPlayback"].forEach(k =>
   $(k).addEventListener("change", e => { config[k] = e.target.checked; markDirty(); }));
 

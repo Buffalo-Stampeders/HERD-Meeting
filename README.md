@@ -75,3 +75,7 @@ After editing `apps-script.gs` in the Apps Script editor: **Deploy → Manage de
 ## Leaving before the end
 
 While a learner is part-way through, closing the tab, reloading or navigating away asks them to confirm first. The browser shows its own wording (e.g. "Leave site? Changes you made may not be saved"); sites aren't allowed to change it, so the sign-in card says plainly that leaving before the end loses progress. Not shown in the admin preview. When embedded, the embed snippet also asks before the visitor navigates the host site away mid-course — re-paste the latest `embed-snippet.html` to get this.
+
+## Deadline
+
+Course settings → **Close the course at** (your computer's time zone) → Publish. From that moment the backend refuses new sign-ins and section submissions, and learners see the **Closed heading / message** instead of the course (a page left open switches over by itself). **Grace minutes** lets people who were already part-way through finish; nobody new can start. Someone who finished before the deadline can still leave their review. Clear it with **No deadline**.
